@@ -136,9 +136,11 @@
     <form class="panel" id="S_form">
       <div class="grid">
         <div class="wide"><label>Gemini API Key（AI Studio 免費申請，貼在這裡就好，不要貼到聊天室）</label><input id="S_geminiKey" type="password" autocomplete="off" placeholder="AIza…"></div>
-        <div><label>Gemini 模型</label><input id="S_model" value="gemini-2.5-flash"></div>
+        <div><label>Gemini 模型（額度滿自動換下一個）</label><input id="S_model" value="gemini-2.5-flash,gemini-2.5-flash-lite"></div>
         <div><label>分析時用 Google 搜尋查本週消息</label>
           <select id="S_grounding"><option value="1">開（建議）</option><option value="0">關</option></select></div>
+        <div><label>每批分析檔數（省額度：100 檔 ÷ 5 = 20 次呼叫）</label>
+          <select id="S_batch"><option value="1">1（逐一）</option><option value="3">3</option><option value="5" selected>5</option><option value="10">10</option></select></div>
         <div class="wide"><label>Google Drive OAuth Client ID（日誌自動存 Drive 用；沒有就先空著，日誌會存本機並可下載）</label><input id="S_driveClient" placeholder="…apps.googleusercontent.com"></div>
       </div>
       <div class="formactions">
@@ -160,6 +162,6 @@
   使用方式：每研究一檔就新增一筆，基本面數字以最新一季財報（10-Q / earnings release）為準並記下日期；消息面欄位記催化劑與事件日期。
   評分是自己的判斷（1-5），不是買賣建議。資料只存在這台裝置的瀏覽器 localStorage，換裝置或清快取前先匯出備份。
 </footer>
-<script src="app.js?v=2"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>
