@@ -107,11 +107,59 @@
     </table>
     <div class="empty" id="emptyState">尚無資料。按「＋ 新增股票」開始整理第一檔。</div>
   </div>
+  <section id="losersZone" style="margin-top:36px;border-top:2px solid #dde3e9;padding-top:20px">
+    <h2 style="margin:0 0 6px;font-size:20px">📉 本週大跌股專區 — 第一性原理 × Gemini</h2>
+    <p style="font-size:13px;color:#45566a;line-height:1.6;margin:0 0 12px">
+      每週抓下跌最多的前 100 檔（NASDAQ / NYSE / AMEX、股價 ≥ $5、市值 ≥ $300M，先擋掉仙股洗版）。
+      按「開始分析」後，Gemini 才會逐一分析：下跌主因、是否市場不理性、反彈機率，並把結果寫成當日日誌自動存到 Google Drive。
+      中途可停止，隔天按了會接著分析還沒跑的。
+    </p>
+    <div class="toolbar">
+      <button id="L_btnLoad">↻ 載入本週大跌榜</button>
+      <span id="L_weekLabel" style="font-size:13px;color:#45566a"></span>
+      <button id="L_btnRun">▶ 開始分析</button>
+      <button id="L_btnStop" class="secondary" disabled>⏸ 停止</button>
+      <span id="L_progress" style="font-size:13px"></span>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>#</th><th>代號</th><th>公司</th><th>產業</th><th class="num">現價</th><th class="num">本週漲跌</th>
+          <th class="num">市值</th><th>分析狀態</th><th>不理性？</th><th class="num">反彈機率</th><th>操作</th>
+        </tr></thead>
+        <tbody id="L_tbody"></tbody>
+      </table>
+      <div class="empty" id="L_empty">尚未載入。按「↻ 載入本週大跌榜」開始。</div>
+    </div>
+
+    <h3 style="margin:22px 0 8px;font-size:16px">⚙️ 專區設定（只存在本機瀏覽器，不會上傳 GitHub）</h3>
+    <form class="panel" id="S_form">
+      <div class="grid">
+        <div class="wide"><label>Gemini API Key（AI Studio 免費申請，貼在這裡就好，不要貼到聊天室）</label><input id="S_geminiKey" type="password" autocomplete="off" placeholder="AIza…"></div>
+        <div><label>Gemini 模型</label><input id="S_model" value="gemini-2.5-flash"></div>
+        <div><label>分析時用 Google 搜尋查本週消息</label>
+          <select id="S_grounding"><option value="1">開（建議）</option><option value="0">關</option></select></div>
+        <div class="wide"><label>Google Drive OAuth Client ID（日誌自動存 Drive 用；沒有就先空著，日誌會存本機並可下載）</label><input id="S_driveClient" placeholder="…apps.googleusercontent.com"></div>
+      </div>
+      <div class="formactions">
+        <button type="submit">儲存設定</button>
+        <span id="S_status" style="font-size:13px;color:#45566a"></span>
+      </div>
+    </form>
+
+    <h3 style="margin:22px 0 8px;font-size:16px">📓 今日分析日誌</h3>
+    <div class="toolbar">
+      <button class="secondary" id="L_btnSync">同步今日日誌到 Drive</button>
+      <button class="secondary" id="L_btnDownloadLog">下載今日日誌 .md</button>
+      <span id="L_driveStatus" style="font-size:13px;color:#45566a"></span>
+    </div>
+    <pre id="L_logView" style="white-space:pre-wrap;background:#fff;border:1px solid #dde3e9;border-radius:8px;max-height:320px;overflow:auto;padding:12px;font-size:12.5px;line-height:1.6">（今日尚無分析紀錄）</pre>
+  </section>
 </main>
 <footer>
   使用方式：每研究一檔就新增一筆，基本面數字以最新一季財報（10-Q / earnings release）為準並記下日期；消息面欄位記催化劑與事件日期。
   評分是自己的判斷（1-5），不是買賣建議。資料只存在這台裝置的瀏覽器 localStorage，換裝置或清快取前先匯出備份。
 </footer>
-<script src="app.js?v=1"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>
