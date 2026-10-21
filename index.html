@@ -111,7 +111,7 @@
     <h2 style="margin:0 0 6px;font-size:20px">📉 本週大跌股專區 — 第一性原理 × Gemini</h2>
     <p style="font-size:13px;color:#45566a;line-height:1.6;margin:0 0 12px">
       每週抓下跌最多的前 100 檔（NASDAQ / NYSE / AMEX、股價 ≥ $5、市值 ≥ $300M，先擋掉仙股洗版）。
-      按「開始分析」後，Gemini 才會逐一分析：下跌主因、是否市場不理性、反彈機率，並把結果寫成當日日誌自動存到 Google Drive。
+      按「開始分析」後，AI（Gemini 或本地 llama.cpp，在下方設定切換）才會逐一分析：下跌主因、是否市場不理性、反彈機率，並把結果寫成當日日誌自動存到 Google Drive。
       中途可停止，隔天按了會接著分析還沒跑的。
     </p>
     <div class="toolbar">
@@ -135,6 +135,13 @@
     <h3 style="margin:22px 0 8px;font-size:16px">⚙️ 專區設定（只存在本機瀏覽器，不會上傳 GitHub）</h3>
     <form class="panel" id="S_form">
       <div class="grid">
+        <div><label>分析來源</label>
+          <select id="S_provider"><option value="gemini">Gemini（雲端，每日有額度）</option><option value="local">本地 llama.cpp（無限量）</option></select></div>
+        <div><label>本地 endpoint（llama-server 位址）</label><input id="S_localEndpoint" value="http://localhost:8080"></div>
+        <div><label>本地模型名稱</label><input id="S_localModel" value="qwen3-coder-30b-a3b-instruct-q4_k_m.gguf"></div>
+        <div><label>本地模式抓新聞標題（GDELT，補即時資訊）</label>
+          <select id="S_localNews"><option value="1">開（建議）</option><option value="0">關</option></select></div>
+        <div><label>連線測試</label><button type="button" class="secondary" id="S_btnTestLocal">測試本地連線</button> <span id="S_localStatus" style="font-size:12.5px"></span></div>
         <div class="wide"><label>Gemini API Key（AI Studio 免費申請，貼在這裡就好，不要貼到聊天室）</label><input id="S_geminiKey" type="password" autocomplete="off" placeholder="AIza…"></div>
         <div><label>Gemini 模型（額度滿自動換下一個）</label><input id="S_model" value="gemini-2.5-flash,gemini-2.5-flash-lite"></div>
         <div><label>分析時用 Google 搜尋查本週消息</label>
@@ -162,6 +169,6 @@
   使用方式：每研究一檔就新增一筆，基本面數字以最新一季財報（10-Q / earnings release）為準並記下日期；消息面欄位記催化劑與事件日期。
   評分是自己的判斷（1-5），不是買賣建議。資料只存在這台裝置的瀏覽器 localStorage，換裝置或清快取前先匯出備份。
 </footer>
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>
