@@ -13,6 +13,6 @@
 - 每日分析結果自動彙成日誌（Markdown，本機可下載）；另可同步到 Google Doc（見下）。
 - v2.1：批次分析（預設 5 檔/次）＋模型備援鏈，壓低 Gemini 免費額度消耗（flash 免費僅 20 次/日）。
 - v2.2：分析來源可切「本地 llama.cpp」——OpenAI 相容 endpoint（預設 http://localhost:8080），無額度限制；本地模式分析前先抓 GDELT 近一週新聞標題餵入 prompt 補即時資訊。建議在跑 llama-server 的那臺電腦開本網站。
-- v2.3：日誌同步改走 **Google Doc**（取代原 Drive 資料夾 .md 作法，不再需要 Google Cloud OAuth Client ID）。機制：使用者自建一份 Google Doc，在文件內貼 `google-doc-sync.gs` 這段 Apps Script 並部署成網頁應用程式，把 /exec 網址貼回專區設定；之後每跑完一檔分析，網站就把該筆結果 POST 給腳本、append 進文件（含時間戳）。送出失敗的紀錄留在本機佇列，下次自動補送。
+- v2.4：日誌同步改走 **Google Doc**（取代原 Drive 資料夾 .md 作法，不再需要 Google Cloud OAuth Client ID）。機制：使用者自建一份 Google Doc，在文件內貼 `google-doc-sync.gs` 這段 Apps Script 並部署成網頁應用程式，把 /exec 網址貼回專區設定；之後每跑完一檔分析，網站就把該筆結果 POST 給腳本、append 進文件（含時間戳）。送出失敗的紀錄留在本機佇列，下次自動補送。
 
 研究流程：每研究一檔就建一筆 → 基本面數字以最新財報為準 → 消息面記催化劑 → 評分與狀態自己拍板。本站只做資料整理，不構成投資建議。
