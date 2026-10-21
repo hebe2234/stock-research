@@ -41,7 +41,7 @@ function render() {
   $('tbody').innerHTML = list.map(s => {
     const st = STATUS[s.status] || STATUS.watch;
     let row = '<tr>' +
-      '<td><strong>' + esc(s.ticker) + '</strong></td><td>' + esc(s.name) + '</td><td>' + esc(s.sector) + '</td>' +
+      '<td><strong>' + esc(s.ticker) + '</strong></td><td class="ellipsis" title="' + esc(s.name) + '">' + esc(s.name) + '</td><td>' + esc(s.sector) + '</td>' +
       '<td class="num">' + num(s.price) + '</td><td class="num">' + num(s.target) + '</td>' +
       '<td class="num">' + num(s.rev, '%') + '</td><td class="num">' + num(s.eps, '%') + '</td><td class="num">' + num(s.roe, '%') + '</td>' +
       '<td class="num">' + num(s.pe) + '</td><td class="num">' + num(s.peg) + '</td>' +
@@ -97,7 +97,7 @@ $('tbody').addEventListener('click', e => {
   if (!btn) return;
   const id = btn.dataset.id, act = btn.dataset.act;
   const stock = stocks.find(s => s.id === id);
-  if (act === 'detail') { expandedId = expandedId === id ? null : id; render(); }
+  if (act === 'detail' && stock) { showWatchModal(stock); }
   if (act === 'edit' && stock) openForm(stock);
   if (act === 'del' && stock && confirm('刪除 ' + stock.ticker + '？')) {
     stocks = stocks.filter(s => s.id !== id); save(); render();
@@ -161,7 +161,9 @@ function todayStr() { return dateStr(new Date()); }
 function mondayKey() { const d = new Date(); const back = (d.getDay() + 6) % 7; d.setDate(d.getDate() - back); return dateStr(d); }
 function fmtMcap(v) { if (!v) return '–'; return v >= 1e9 ? '$' + (v / 1e9).toFixed(1) + 'B' : '$' + Math.round(v / 1e6) + 'M'; }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function doneCount() { return L.list.filter(s => { const r = L.results[s.ticker]; return r && !r.err; }).length; }
+function resOf(t, prov) { const r = L.results[t]; return r ? (r[prov] || null) : null; }
+function provOfRes(res) { return (res && res.model && String(res.model).indexOf('local:') === 0) ? 'local' : 'gemini'; }
+function doneCount(prov) { return L.list.filter(s => { const r = resOf(s.ticker, prov); return r && !r.err; }).length; }
 
 async function fetchLosers() {
   $('L_weekLabel').textContent = '載入中…';
@@ -206,20 +208,21 @@ function renderL() {
     ? ('榜單週：' + L.weekKey + (L.weekKey !== wk ? '（已跨週，按「載入」更新）' : '') + '・抓取於 ' + (L.fetchedAt || '').slice(0, 10))
     : '';
   $('L_empty').style.display = L.list.length ? 'none' : 'block';
-  if (L.list.length && !running) $('L_progress').textContent = '已分析 ' + doneCount() + ' / ' + L.list.length;
+  if (L.list.length && !running) $('L_progress').textContent = 'Gemini ' + doneCount('gemini') + ' / ' + L.list.length + '・本地 ' + doneCount('local') + ' / ' + L.list.length;
   $('L_tbody').innerHTML = L.list.map((s, i) => {
-    const res = L.results[s.ticker];
-    let status = '未分析', irr = '–', prob = '–';
-    if (res) {
-      if (res.err) status = '⚠️ 失敗';
-      else { status = '✅ 完成'; irr = esc(res.irrational || '–'); prob = (res.reboundProb === '' || res.reboundProb == null) ? '–' : res.reboundProb + '%'; }
-    }
-    let row = '<tr><td>' + (i + 1) + '</td><td><strong>' + esc(s.ticker) + '</strong></td><td>' + esc(s.name) + '</td><td>' + esc(s.sector) + '</td>' +
+    const g = resOf(s.ticker, 'gemini'), l = resOf(s.ticker, 'local');
+    const st = (r) => r ? (r.err ? '⚠️' : '✅') : '–';
+    const status = 'G ' + st(g) + ' / 本 ' + st(l);
+    const irrPart = (tag, r) => (r && !r.err && r.irrational) ? tag + ' ' + esc(r.irrational) : '';
+    const irr = [irrPart('G', g), irrPart('本', l)].filter(Boolean).join('・') || '–';
+    const probPart = (tag, r) => (r && !r.err && r.reboundProb !== '' && r.reboundProb != null) ? tag + ' ' + r.reboundProb + '%' : '';
+    const prob = [probPart('G', g), probPart('本', l)].filter(Boolean).join('・') || '–';
+    let row = '<tr><td>' + (i + 1) + '</td><td><strong>' + esc(s.ticker) + '</strong></td><td class="ellipsis" title="' + esc(s.name) + '">' + esc(s.name) + '</td><td>' + esc(s.sector) + '</td>' +
       '<td class="num">' + num(s.price) + '</td><td class="num" style="color:#b3261e">' + (s.chgW == null ? '–' : s.chgW.toFixed(1) + '%') + '</td>' +
       '<td class="num">' + fmtMcap(s.mcap) + '</td><td>' + status + '</td><td>' + irr + '</td><td class="num">' + prob + '</td>' +
-      '<td><button class="small secondary" data-lact="one" data-t="' + esc(s.ticker) + '">分析</button> ' +
-      '<button class="small secondary" data-lact="detail" data-t="' + esc(s.ticker) + '">詳情</button></td></tr>';
-    if (LexpandedId === s.ticker && res) row += '<tr class="detail"><td colspan="11">' + detailHTML(s, res) + '</td></tr>';
+      '<td><button class="small secondary" data-lact="g" data-t="' + esc(s.ticker) + '">Gemini</button> ' +
+      '<button class="small secondary" data-lact="l" data-t="' + esc(s.ticker) + '">本地</button> ' +
+      '<button class="small secondary" data-lact="detail" data-t="' + esc(s.ticker) + '">比較</button></td></tr>';
     return row;
   }).join('');
 }
@@ -316,8 +319,8 @@ async function localCall(prompt) {
   return { text: text, model: 'local:' + (SET.localModel || '') };
 }
 
-async function callLLM(batch) {
-  if (SET.provider === 'local') {
+async function callLLM(batch, provider) {
+  if (provider === 'local') {
     let newsMap = null;
     if (SET.localNews !== '0') {
       newsMap = {};
@@ -351,23 +354,24 @@ function parseBatch(text) {
   return map;
 }
 
-async function analyzeBatch(batch) {
-  const out = await callLLM(batch);
+async function analyzeBatch(batch, provider) {
+  const out = await callLLM(batch, provider);
   const map = parseBatch(out.text);
   const at = new Date().toISOString();
   for (const s of batch) {
     const f = map[String(s.ticker).toUpperCase()];
     const res = f ? Object.assign({ at: at, model: out.model }, f) : { at: at, model: out.model, raw: out.text };
-    L.results[s.ticker] = res;
-    ARCH = ARCH.filter(a => !(a.date === todayStr() && a.ticker === s.ticker));
-    ARCH.push({ date: todayStr(), weekKey: L.weekKey, ticker: s.ticker, name: s.name, chgW: s.chgW, res: res });
+    const slot = L.results[s.ticker] || (L.results[s.ticker] = {});
+    slot[provider] = res;
+    ARCH = ARCH.filter(a => !(a.date === todayStr() && a.ticker === s.ticker && (a.provider || provOfRes(a.res)) === provider));
+    ARCH.push({ date: todayStr(), weekKey: L.weekKey, ticker: s.ticker, name: s.name, chgW: s.chgW, provider: provider, res: res });
   }
   saveJSON(LKEY, L);
   saveJSON(AKEY, ARCH);
   renderL(); updateLogView();
 }
 
-async function analyzeOne(s) { await analyzeBatch([s]); }
+async function analyzeOne(s) { await analyzeBatch([s], SET.provider); }
 
 async function runAnalysis() {
   if (running) return;
@@ -380,7 +384,7 @@ async function runAnalysis() {
     $('L_progress').textContent = '';
   }
   if (SET.driveClientId) { try { await getToken(); } catch (e) { $('L_driveStatus').textContent = 'Drive 授權失敗：' + e.message + '（日誌仍會存本機）'; } }
-  const targets = L.list.filter(s => { const r = L.results[s.ticker]; return !r || r.err; });
+  const targets = L.list.filter(s => { const r = resOf(s.ticker, SET.provider); return !r || r.err; });
   if (!targets.length) { $('L_progress').textContent = '本週榜單已全部分析完'; return; }
   const batchSize = SET.provider === 'local' ? 1 : Math.max(1, parseInt(SET.batch, 10) || 5);
   const batches = [];
@@ -393,36 +397,46 @@ async function runAnalysis() {
     const batch = batches[bi];
     $('L_progress').textContent = '分析中（批次 ' + (bi + 1) + ' / ' + batches.length + '）：' + batch.map(s => s.ticker).join(', ') + '…';
     try {
-      await analyzeBatch(batch); okCount += batch.length;
+      await analyzeBatch(batch, SET.provider); okCount += batch.length;
       syncDriveLog();
     } catch (e) {
       if (/^LOCALDOWN:/.test(e.message) || /Failed to fetch/i.test(e.message)) { $('L_progress').textContent = '連不上本地模型，先停下：確認 llama-server 有開、位址正確、在同一臺電腦開網站。'; break; }
       if (/^QUOTA:/.test(e.message)) { $('L_progress').textContent = '所有模型的免費額度都用完了，剩下的明天按「開始分析」會接著跑。'; break; }
       if (/401|403|API key/i.test(e.message)) { $('L_progress').textContent = 'Gemini 金鑰有問題，先停下：' + e.message; break; }
-      for (const s of batch) { L.results[s.ticker] = { err: e.message, at: new Date().toISOString() }; }
+      for (const s of batch) { const slot = L.results[s.ticker] || (L.results[s.ticker] = {}); slot[SET.provider] = { err: e.message, at: new Date().toISOString() }; }
       saveJSON(LKEY, L); renderL();
     }
     if (!stopFlag) await sleep(SET.provider === 'local' ? 1000 : 6500);
   }
   running = false;
   $('L_btnRun').disabled = false; $('L_btnStop').disabled = true;
-  if (!stopFlag && okCount) $('L_progress').textContent = '本輪完成（新增 ' + okCount + ' 檔）。已分析 ' + doneCount() + ' / ' + L.list.length;
+  if (!stopFlag && okCount) $('L_progress').textContent = '本輪完成（新增 ' + okCount + ' 檔）。已分析 ' + doneCount(SET.provider) + ' / ' + L.list.length;
   renderL();
 }
 
 function buildLog(date) {
   const items = ARCH.filter(a => a.date === date);
   if (!items.length) return '';
-  let md = '# 選股研究日誌 ' + date + '\n\n本週大跌股・第一性原理分析（Gemini）\n';
+  const order = [], byT = {};
   for (const a of items) {
-    const r = a.res || {};
-    md += '\n## ' + a.ticker + ' ' + (a.name || '') + '（本週 ' + (a.chgW == null ? '?' : a.chgW.toFixed(1)) + '%）\n';
-    if (r.raw) { md += '- Gemini 原始回覆（解析失敗，原文保留）：\n' + r.raw + '\n'; continue; }
-    md += '- 下跌主因：' + (r.cause || '') + '\n';
-    md += '- 分類：' + (r.category || '') + '\n';
-    md += '- 市場不理性：' + (r.irrational || '') + ' — ' + (r.reason || '') + '\n';
-    md += '- 反彈機率（1–3 個月漲回跌前價位）：' + (r.reboundProb === '' || r.reboundProb == null ? '–' : r.reboundProb + '%') + '\n';
-    md += '- 觀察重點：' + (r.keyPoints || '') + '\n';
+    if (!byT[a.ticker]) { byT[a.ticker] = { name: a.name, chgW: a.chgW, entries: [] }; order.push(a.ticker); }
+    byT[a.ticker].entries.push(a);
+  }
+  let md = '# 選股研究日誌 ' + date + '\n\n本週大跌股・第一性原理分析（Gemini／本地模型對照）\n';
+  for (const t of order) {
+    const g = byT[t];
+    md += '\n## ' + t + ' ' + (g.name || '') + '（本週 ' + (g.chgW == null ? '?' : g.chgW.toFixed(1)) + '%）\n';
+    for (const a of g.entries) {
+      const r = a.res || {};
+      const prov = a.provider || provOfRes(r);
+      md += '\n### ' + (prov === 'local' ? '本地模型' : 'Gemini') + '（' + (r.model || '') + '）\n';
+      if (r.raw) { md += '- 原始回覆（解析失敗，原文保留）：\n' + r.raw + '\n'; continue; }
+      md += '- 下跌主因：' + (r.cause || '') + '\n';
+      md += '- 分類：' + (r.category || '') + '\n';
+      md += '- 市場不理性：' + (r.irrational || '') + ' — ' + (r.reason || '') + '\n';
+      md += '- 反彈機率（1–3 個月漲回跌前價位）：' + (r.reboundProb === '' || r.reboundProb == null ? '–' : r.reboundProb + '%') + '\n';
+      md += '- 觀察重點：' + (r.keyPoints || '') + '\n';
+    }
   }
   return md;
 }
@@ -524,11 +538,13 @@ $('L_tbody').addEventListener('click', async (e) => {
   const t = btn.dataset.t;
   const s = L.list.find(x => x.ticker === t);
   if (!s) return;
-  if (btn.dataset.lact === 'detail') { LexpandedId = LexpandedId === t ? null : t; renderL(); return; }
-  if (btn.dataset.lact === 'one') {
-    if (SET.provider !== 'local' && (!SET.geminiKey || !SET.geminiKey.trim())) { alert('先在專區設定填 Gemini API Key 並儲存'); return; }
+  if (btn.dataset.lact === 'detail') { showStockModal(s); return; }
+  if (btn.dataset.lact === 'g' || btn.dataset.lact === 'l') {
+    const prov = btn.dataset.lact === 'g' ? 'gemini' : 'local';
+    if (prov === 'gemini' && (!SET.geminiKey || !SET.geminiKey.trim())) { alert('先在專區設定填 Gemini API Key 並儲存'); return; }
+    if (prov === 'local' && !(await pingLocal())) { alert('連不上本地模型：確認 llama-server 有開、位址正確、在同一臺電腦開網站'); return; }
     btn.disabled = true; btn.textContent = '分析中…';
-    try { await analyzeOne(s); syncDriveLog(); }
+    try { await analyzeBatch([s], prov); syncDriveLog(); }
     catch (err) { alert('分析失敗：' + err.message); }
     renderL();
   }
@@ -593,5 +609,73 @@ $('S_model').value = SET.model || 'gemini-2.5-flash,gemini-2.5-flash-lite';
 $('S_grounding').value = SET.grounding || '1';
 $('S_batch').value = SET.batch || '5';
 $('S_driveClient').value = SET.driveClientId || '';
+renderL();
+updateLogView();
+
+// ===== 詳情 / 比較彈窗 =====
+function showModal(html) { $('modalContent').innerHTML = html; $('modalOverlay').style.display = 'flex'; }
+function hideModal() { $('modalOverlay').style.display = 'none'; }
+$('modalClose').addEventListener('click', hideModal);
+$('modalOverlay').addEventListener('click', (e) => { if (e.target === $('modalOverlay')) hideModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideModal(); });
+
+function analysisInner(res) {
+  if (!res) return '<div>尚無分析</div>';
+  if (res.err) return '<div><strong>分析失敗：</strong>' + esc(res.err) + '</div>';
+  if (res.raw) return '<div>原始回覆（解析失敗，原文保留）：</div><div>' + esc(res.raw).replace(/\n/g, '<br>') + '</div>';
+  return '<div><strong>下跌主因：</strong>' + esc(res.cause || '') + '</div>' +
+    '<div><strong>分類：</strong>' + esc(res.category || '') + '</div>' +
+    '<div><strong>市場不理性：</strong>' + esc(res.irrational || '') + ' — ' + esc(res.reason || '') + '</div>' +
+    '<div><strong>反彈機率：</strong>' + esc(res.reboundProb) + '%</div>' +
+    '<div><strong>觀察重點：</strong>' + esc(res.keyPoints || '') + '</div>' +
+    '<div style="color:#5b6b7a;font-size:12.5px">' + esc((res.at || '').slice(0, 16).replace('T', ' ')) + ' / ' + esc(res.model || '') + '</div>';
+}
+
+function showStockModal(s) {
+  const g = resOf(s.ticker, 'gemini'), l = resOf(s.ticker, 'local');
+  let h = '<h3>' + esc(s.ticker) + ' ' + esc(s.name) + '</h3>' +
+    '<div>產業：' + esc(s.sector || '–') + '・現價 $' + num(s.price) + '・本週 ' + (s.chgW == null ? '–' : s.chgW.toFixed(1) + '%') + '・市值 ' + fmtMcap(s.mcap) + '</div>';
+  if (g && l && !g.err && !l.err && !g.raw && !l.raw) {
+    const same = (g.irrational || '') === (l.irrational || '');
+    const dp = (typeof g.reboundProb === 'number' && typeof l.reboundProb === 'number') ? Math.abs(g.reboundProb - l.reboundProb) : null;
+    h += '<div style="background:#eef2f6;border-radius:8px;padding:8px 12px;margin-top:10px"><strong>比較：</strong>不理性結論' +
+      (same ? '相同' : '不同（Gemini：' + esc(g.irrational || '') + '／本地：' + esc(l.irrational || '') + '）') +
+      (dp == null ? '' : '；反彈機率差 ' + dp + ' 個百分點') + '</div>';
+  }
+  h += '<div class="k">🤖 Gemini</div>' + analysisInner(g);
+  h += '<div class="k">🖥️ 本地模型</div>' + analysisInner(l);
+  showModal(h);
+}
+
+function showWatchModal(s) {
+  const st = STATUS[s.status] || STATUS.watch;
+  const row = (k, v) => '<div class="k">' + k + '</div><div>' + v + '</div>';
+  const h = '<h3>' + esc(s.ticker) + ' ' + esc(s.name) + '</h3>' +
+    '<div>產業：' + esc(s.sector || '–') + '・狀態：' + st[0] + '・評分：' + (s.score ? s.score + ' / 5' : '未評分') + '</div>' +
+    row('現價 / 目標價', '$' + num(s.price) + ' / $' + num(s.target)) +
+    row('營收成長 / EPS 成長', num(s.rev, '%') + ' / ' + num(s.eps, '%')) +
+    row('毛利率 / ROE', num(s.gm, '%') + ' / ' + num(s.roe, '%')) +
+    row('FCF / D/E', (s.fcf === '' || s.fcf == null ? '–' : '$' + esc(s.fcf) + 'M') + ' / ' + num(s.de)) +
+    row('P/E / PEG', num(s.pe) + ' / ' + num(s.peg)) +
+    row('下次財報', esc(s.earnings || '–')) +
+    row('消息面 / 催化劑', esc(s.catalyst || '（無）')) +
+    row('研究筆記', esc(s.notes || '（無）').replace(/\n/g, '<br>')) +
+    row('更新時間', esc((s.updatedAt || '').slice(0, 10)));
+  showModal(h);
+}
+
+function migrateResults() {
+  let changed = false;
+  for (const t of Object.keys(L.results || {})) {
+    const r = L.results[t];
+    if (r && !r.gemini && !r.local && (r.cause !== undefined || r.raw !== undefined || r.err || r.at)) {
+      const prov = (provOfRes(r) === 'local' || /本地|LOCALDOWN/.test(r.err || '')) ? 'local' : 'gemini';
+      L.results[t] = {}; L.results[t][prov] = r; changed = true;
+    }
+  }
+  if (changed) saveJSON(LKEY, L);
+}
+
+migrateResults();
 renderL();
 updateLogView();
