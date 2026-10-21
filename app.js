@@ -219,55 +219,91 @@ function renderL() {
   }).join('');
 }
 
-function buildPrompt(s) {
-  return '你是股票分析師，用第一性原理分析美股 ' + s.ticker + '（' + s.name + '，產業：' + (s.sector || '未知') + '）。' +
-    '它本週下跌 ' + (s.chgW == null ? '?' : Math.abs(s.chgW).toFixed(1)) + '%，現價 $' + s.price + '，市值約 ' + fmtMcap(s.mcap) + '。' +
-    '請先查明本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面），然後只輸出一個 JSON 物件，不要任何其他文字、不要 markdown 圍欄。欄位：' +
-    '{"dropCause":"下跌主因，一段話，註明消息日期","category":"基本面惡化|消息面一次性衝擊|市場情緒/資金面|產業系統性|不明",' +
+function models() {
+  const list = (SET.model || 'gemini-2.5-flash').split(',').map(x => x.trim()).filter(Boolean);
+  if (!list.includes('gemini-2.5-flash-lite')) list.push('gemini-2.5-flash-lite');
+  return list;
+}
+
+function buildBatchPrompt(batch) {
+  const lines = batch.map(s => '- ' + s.ticker + '（' + s.name + '，產業：' + (s.sector || '未知') + '）：本週漲跌 ' + (s.chgW == null ? '?' : s.chgW.toFixed(1)) + '%，現價 $' + s.price + '，市值約 ' + fmtMcap(s.mcap)).join('\n');
+  return '你是股票分析師，用第一性原理逐一分析以下美股本週大跌的原因。清單：\n' + lines +
+    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面），然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
+    '{"ticker":"代號","dropCause":"下跌主因，一段話，註明消息日期","category":"基本面惡化|消息面一次性衝擊|市場情緒/資金面|產業系統性|不明",' +
     '"irrational":"是|否|部分","irrationalReason":"為什麼這樣判斷，公司核心基本面是否實質受損","reboundProb":0到100的整數（未來1到3個月漲回本週下跌前價位的機率）,' +
     '"keyPoints":"投資人該觀察的2到3個驗證點"}';
 }
 
-async function geminiAnalyze(s) {
-  const model = (SET.model || 'gemini-2.5-flash').trim();
+async function geminiCallOnce(model, prompt, useGrounding) {
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(SET.geminiKey.trim());
-  const body = { contents: [{ parts: [{ text: buildPrompt(s) }] }], generationConfig: { temperature: 0.3 } };
-  if (SET.grounding !== '0') body.tools = [{ google_search: {} }];
+  const body = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.3 } };
+  if (useGrounding) body.tools = [{ google_search: {} }];
   const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error('Gemini ' + r.status + '：' + ((j.error && j.error.message) || ''));
   const parts = ((((j.candidates || [])[0] || {}).content || {}).parts || []);
   const text = parts.map(p => p.text || '').join('');
   if (!text) throw new Error('Gemini 回覆空白');
-  return parseAnalysis(text, model);
+  return { text: text, model: model };
 }
 
-function parseAnalysis(text, model) {
-  const base = { at: new Date().toISOString(), model: model };
+async function geminiCall(prompt) {
+  let lastErr = null, quotaHit = false;
+  for (const model of models()) {
+    const variants = SET.grounding !== '0' ? [true, false] : [false];
+    for (const g of variants) {
+      try { return await geminiCallOnce(model, prompt, g); }
+      catch (e) {
+        lastErr = e;
+        if (/401|403|API key/i.test(e.message)) throw e;
+        if (/429|RESOURCE_EXHAUSTED|quota/i.test(e.message)) { quotaHit = true; break; }
+      }
+    }
+  }
+  if (quotaHit) throw new Error('QUOTA: 所有模型的免費額度都用完了');
+  throw lastErr || new Error('Gemini 呼叫失敗');
+}
+
+function parseBatch(text) {
   let t = text.trim().replace(/```json/gi, '').replace(/```/g, '').trim();
-  const a = t.indexOf('{'), b = t.lastIndexOf('}');
-  if (a >= 0 && b > a) {
-    try {
-      const o = JSON.parse(t.slice(a, b + 1));
+  const map = {};
+  let arr = null;
+  const a = t.indexOf('['), b = t.lastIndexOf(']');
+  if (a >= 0 && b > a) { try { arr = JSON.parse(t.slice(a, b + 1)); } catch (e) { /* 繼續試單物件 */ } }
+  if (!Array.isArray(arr)) {
+    const oa = t.indexOf('{'), ob = t.lastIndexOf('}');
+    if (oa >= 0 && ob > oa) { try { const o = JSON.parse(t.slice(oa, ob + 1)); if (o && o.ticker) arr = [o]; } catch (e) { /* 解析失敗 */ } }
+  }
+  if (Array.isArray(arr)) {
+    for (const o of arr) {
+      if (!o || !o.ticker) continue;
       let kp = o.keyPoints;
       if (Array.isArray(kp)) kp = kp.join('；');
       let prob = parseInt(o.reboundProb, 10);
       if (isNaN(prob)) prob = '';
-      return Object.assign(base, { cause: o.dropCause || o.cause || '', category: o.category || '', irrational: o.irrational || '', reason: o.irrationalReason || o.reason || '', reboundProb: prob, keyPoints: kp || '' });
-    } catch (e) { /* 解析失敗就保留原文 */ }
+      map[String(o.ticker).toUpperCase()] = { cause: o.dropCause || o.cause || '', category: o.category || '', irrational: o.irrational || '', reason: o.irrationalReason || o.reason || '', reboundProb: prob, keyPoints: kp || '' };
+    }
   }
-  return Object.assign(base, { raw: text });
+  return map;
 }
 
-async function analyzeOne(s) {
-  const res = await geminiAnalyze(s);
-  L.results[s.ticker] = res;
+async function analyzeBatch(batch) {
+  const out = await geminiCall(buildBatchPrompt(batch));
+  const map = parseBatch(out.text);
+  const at = new Date().toISOString();
+  for (const s of batch) {
+    const f = map[String(s.ticker).toUpperCase()];
+    const res = f ? Object.assign({ at: at, model: out.model }, f) : { at: at, model: out.model, raw: out.text };
+    L.results[s.ticker] = res;
+    ARCH = ARCH.filter(a => !(a.date === todayStr() && a.ticker === s.ticker));
+    ARCH.push({ date: todayStr(), weekKey: L.weekKey, ticker: s.ticker, name: s.name, chgW: s.chgW, res: res });
+  }
   saveJSON(LKEY, L);
-  ARCH = ARCH.filter(a => !(a.date === todayStr() && a.ticker === s.ticker));
-  ARCH.push({ date: todayStr(), weekKey: L.weekKey, ticker: s.ticker, name: s.name, chgW: s.chgW, res: res });
   saveJSON(AKEY, ARCH);
   renderL(); updateLogView();
 }
+
+async function analyzeOne(s) { await analyzeBatch([s]); }
 
 async function runAnalysis() {
   if (running) return;
@@ -276,20 +312,24 @@ async function runAnalysis() {
   if (SET.driveClientId) { try { await getToken(); } catch (e) { $('L_driveStatus').textContent = 'Drive 授權失敗：' + e.message + '（日誌仍會存本機）'; } }
   const targets = L.list.filter(s => { const r = L.results[s.ticker]; return !r || r.err; });
   if (!targets.length) { $('L_progress').textContent = '本週榜單已全部分析完'; return; }
+  const batchSize = Math.max(1, parseInt(SET.batch, 10) || 5);
+  const batches = [];
+  for (let i = 0; i < targets.length; i += batchSize) batches.push(targets.slice(i, i + batchSize));
   running = true; stopFlag = false;
   $('L_btnRun').disabled = true; $('L_btnStop').disabled = false;
   let okCount = 0;
-  for (const s of targets) {
+  for (let bi = 0; bi < batches.length; bi++) {
     if (stopFlag) break;
-    $('L_progress').textContent = '分析中 ' + s.ticker + '（第 ' + (doneCount() + 1) + ' / ' + L.list.length + '）…';
+    const batch = batches[bi];
+    $('L_progress').textContent = '分析中（批次 ' + (bi + 1) + ' / ' + batches.length + '）：' + batch.map(s => s.ticker).join(', ') + '…';
     try {
-      await analyzeOne(s); okCount++;
+      await analyzeBatch(batch); okCount += batch.length;
       syncDriveLog();
     } catch (e) {
-      L.results[s.ticker] = { err: e.message, at: new Date().toISOString() };
+      if (/^QUOTA:/.test(e.message)) { $('L_progress').textContent = '所有模型的免費額度都用完了，剩下的明天按「開始分析」會接著跑。'; break; }
+      if (/401|403|API key/i.test(e.message)) { $('L_progress').textContent = 'Gemini 金鑰有問題，先停下：' + e.message; break; }
+      for (const s of batch) { L.results[s.ticker] = { err: e.message, at: new Date().toISOString() }; }
       saveJSON(LKEY, L); renderL();
-      if (/429|quota|RESOURCE_EXHAUSTED/i.test(e.message)) { $('L_progress').textContent = 'Gemini 免費額度用完了，剩下的明天按「開始分析」會接著跑。'; break; }
-      if (/400|401|403|API key/i.test(e.message)) { $('L_progress').textContent = 'Gemini 金鑰或模型有問題，先停下：' + e.message; break; }
     }
     if (!stopFlag) await sleep(6500);
   }
@@ -425,8 +465,9 @@ $('L_tbody').addEventListener('click', async (e) => {
 $('S_form').addEventListener('submit', (e) => {
   e.preventDefault();
   SET.geminiKey = $('S_geminiKey').value;
-  SET.model = $('S_model').value || 'gemini-2.5-flash';
+  SET.model = $('S_model').value || 'gemini-2.5-flash,gemini-2.5-flash-lite';
   SET.grounding = $('S_grounding').value;
+  SET.batch = $('S_batch').value;
   SET.driveClientId = $('S_driveClient').value;
   saveJSON(SKEY, SET);
   $('S_status').textContent = '已儲存（' + new Date().toTimeString().slice(0, 8) + '）';
@@ -448,8 +489,9 @@ $('L_btnDownloadLog').addEventListener('click', () => {
 });
 
 $('S_geminiKey').value = SET.geminiKey || '';
-$('S_model').value = SET.model || 'gemini-2.5-flash';
+$('S_model').value = SET.model || 'gemini-2.5-flash,gemini-2.5-flash-lite';
 $('S_grounding').value = SET.grounding || '1';
+$('S_batch').value = SET.batch || '5';
 $('S_driveClient').value = SET.driveClientId || '';
 renderL();
 updateLogView();
