@@ -135,23 +135,24 @@ $('fileImport').addEventListener('change', e => {
 
 render();
 
-// ===== 本週大跌股專區（TradingView 榜單 + Gemini 逐一分析 + Drive 日誌） =====
+// ===== 本週大跌股專區（TradingView 榜單 + Gemini 逐一分析 + Google Doc 日誌） =====
 const LKEY = 'stockResearch.losers.v1';
 const AKEY = 'stockResearch.archive.v1';
 const SKEY = 'stockResearch.settings';
-const DKEY = 'stockResearch.drive';
+const QKEY = 'stockResearch.docqueue';
 let L = loadJSON(LKEY, { weekKey: '', fetchedAt: '', list: [], results: {} });
 let ARCH = loadJSON(AKEY, []);
-let SET = loadJSON(SKEY, { geminiKey: '', model: 'gemini-2.5-flash', grounding: '1', driveClientId: '' });
+let SET = loadJSON(SKEY, { geminiKey: '', model: 'gemini-2.5-flash', grounding: '1', docUrl: '' });
 SET.provider = SET.provider || 'gemini';
 SET.localEndpoint = SET.localEndpoint || 'http://localhost:8080';
 SET.localModel = SET.localModel || 'qwen3-coder-30b-a3b-instruct-q4_k_m.gguf';
 SET.localApiKey = SET.localApiKey || '';
 SET.localNews = SET.localNews || '1';
-let DRV = loadJSON(DKEY, { folderId: '', files: {} });
+SET.docUrl = SET.docUrl || '';
+let DOCQ = loadJSON(QKEY, []);
 let LexpandedId = null;
 let running = false, stopFlag = false;
-let accessToken = null, tokenExp = 0, tokenClient = null, gisPromise = null, syncing = false;
+let docFlushing = false;
 
 function loadJSON(k, dft) { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? dft : v; } catch (e) { return dft; } }
 function saveJSON(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
@@ -365,10 +366,12 @@ async function analyzeBatch(batch, provider) {
     slot[provider] = res;
     ARCH = ARCH.filter(a => !(a.date === todayStr() && a.ticker === s.ticker && (a.provider || provOfRes(a.res)) === provider));
     ARCH.push({ date: todayStr(), weekKey: L.weekKey, ticker: s.ticker, name: s.name, chgW: s.chgW, provider: provider, res: res });
+    enqueueDoc({ date: todayStr(), time: new Date().toTimeString().slice(0, 5), ticker: s.ticker, name: s.name, chgW: s.chgW, provider: provider, model: res.model || '', cause: res.cause || '', category: res.category || '', irrational: res.irrational || '', reason: res.reason || '', reboundProb: (res.reboundProb === '' || res.reboundProb == null ? '' : res.reboundProb), keyPoints: res.keyPoints || '', raw: res.raw || '' });
   }
   saveJSON(LKEY, L);
   saveJSON(AKEY, ARCH);
   renderL(); updateLogView();
+  flushDocQueue();
 }
 
 async function analyzeOne(s) { await analyzeBatch([s], SET.provider); }
@@ -383,7 +386,6 @@ async function runAnalysis() {
     if (!okPing) { $('L_progress').textContent = '連不上本地模型：確認 llama-server 已啟動、endpoint 位址正確，且是在跑 llama 的那臺電腦開這個網站。'; return; }
     $('L_progress').textContent = '';
   }
-  if (SET.driveClientId) { try { await getToken(); } catch (e) { $('L_driveStatus').textContent = 'Drive 授權失敗：' + e.message + '（日誌仍會存本機）'; } }
   const targets = L.list.filter(s => { const r = resOf(s.ticker, SET.provider); return !r || r.err; });
   if (!targets.length) { $('L_progress').textContent = '本週榜單已全部分析完'; return; }
   const batchSize = SET.provider === 'local' ? 1 : Math.max(1, parseInt(SET.batch, 10) || 5);
@@ -398,7 +400,6 @@ async function runAnalysis() {
     $('L_progress').textContent = '分析中（批次 ' + (bi + 1) + ' / ' + batches.length + '）：' + batch.map(s => s.ticker).join(', ') + '…';
     try {
       await analyzeBatch(batch, SET.provider); okCount += batch.length;
-      syncDriveLog();
     } catch (e) {
       if (/^LOCALDOWN:/.test(e.message) || /Failed to fetch/i.test(e.message)) { $('L_progress').textContent = '連不上本地模型，先停下：確認 llama-server 有開、位址正確、在同一臺電腦開網站。'; break; }
       if (/^QUOTA:/.test(e.message)) { $('L_progress').textContent = '所有模型的免費額度都用完了，剩下的明天按「開始分析」會接著跑。'; break; }
@@ -446,84 +447,34 @@ function updateLogView() {
   $('L_logView').textContent = md || '（今日尚無分析紀錄）';
 }
 
-function loadGis() {
-  if (gisPromise) return gisPromise;
-  gisPromise = new Promise((res, rej) => {
-    const sc = document.createElement('script');
-    sc.src = 'https://accounts.google.com/gsi/client';
-    sc.onload = res; sc.onerror = () => rej(new Error('GIS 載入失敗'));
-    document.head.appendChild(sc);
-  });
-  return gisPromise;
+/* ----- Google Doc 同步（Apps Script 橋接：每筆分析完成 append 進使用者自己的 Doc） ----- */
+function enqueueDoc(payload) {
+  DOCQ.push(payload);
+  saveJSON(QKEY, DOCQ);
 }
 
-async function getToken() {
-  if (accessToken && Date.now() < tokenExp - 60000) return accessToken;
-  await loadGis();
-  return new Promise((res, rej) => {
-    tokenClient = google.accounts.oauth2.initTokenClient({
-      client_id: SET.driveClientId.trim(),
-      scope: 'https://www.googleapis.com/auth/drive.file',
-      callback: (resp) => {
-        if (resp && resp.access_token) { accessToken = resp.access_token; tokenExp = Date.now() + (resp.expires_in || 3600) * 1000; res(accessToken); }
-        else rej(new Error((resp && resp.error) || '授權失敗'));
-      }
-    });
-    tokenClient.requestAccessToken({ prompt: '' });
-  });
-}
+function docStatus(msg) { const el = $('L_docStatus'); if (el) el.textContent = msg; }
 
-async function driveApi(path, opts) {
-  const r = await fetch('https://www.googleapis.com' + path, Object.assign({ headers: { Authorization: 'Bearer ' + accessToken } }, opts || {}));
-  if (!r.ok) throw new Error('Drive ' + r.status);
-  return r.status === 204 ? null : r.json().catch(() => null);
-}
-
-async function ensureFolder() {
-  if (DRV.folderId) return DRV.folderId;
-  const q = encodeURIComponent("name='Stock Research 日誌' and mimeType='application/vnd.google-apps.folder' and trashed=false");
-  const found = await driveApi('/drive/v3/files?q=' + q + '&fields=files(id,name)');
-  if (found && found.files && found.files.length) { DRV.folderId = found.files[0].id; }
-  else {
-    const created = await driveApi('/drive/v3/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Stock Research 日誌', mimeType: 'application/vnd.google-apps.folder' }) });
-    DRV.folderId = created.id;
+async function flushDocQueue(manual) {
+  const url = (SET.docUrl || '').trim();
+  if (!DOCQ.length) {
+    if (manual) docStatus(url ? 'Google Doc：目前沒有待送紀錄' : 'Google Doc 未設定：先在專區設定貼上同步網址');
+    return;
   }
-  saveJSON(DKEY, DRV);
-  return DRV.folderId;
-}
-
-async function syncDriveLog() {
-  if (!SET.driveClientId) { $('L_driveStatus').textContent = 'Drive 未設定：日誌目前只存本機（設定填 Client ID 後自動同步）'; return; }
-  if (syncing) return;
-  const date = todayStr();
-  const content = buildLog(date);
-  if (!content) { $('L_driveStatus').textContent = '今日尚無日誌可同步'; return; }
-  syncing = true;
-  try {
-    await getToken();
-    const folderId = await ensureFolder();
-    let fileId = DRV.files[date];
-    if (!fileId) {
-      const q = encodeURIComponent("name='" + date + ".md' and '" + folderId + "' in parents and trashed=false");
-      const found = await driveApi('/drive/v3/files?q=' + q + '&fields=files(id)');
-      if (found && found.files && found.files.length) fileId = found.files[0].id;
-    }
-    if (fileId) {
-      const r = await fetch('https://www.googleapis.com/upload/drive/v3/files/' + fileId + '?uploadType=media', { method: 'PATCH', headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'text/markdown' }, body: content });
-      if (!r.ok) throw new Error('Drive 上傳 ' + r.status);
-    } else {
-      const boundary = 'sr' + Date.now();
-      const meta = JSON.stringify({ name: date + '.md', parents: [folderId], mimeType: 'text/markdown' });
-      const payload = '--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + meta + '\r\n--' + boundary + '\r\nContent-Type: text/markdown\r\n\r\n' + content + '\r\n--' + boundary + '--';
-      const created = await driveApi('/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + boundary }, body: payload });
-      fileId = created.id;
-    }
-    DRV.files[date] = fileId; saveJSON(DKEY, DRV);
-    $('L_driveStatus').textContent = '✅ 日誌已同步 Drive（' + date + '.md，' + new Date().toTimeString().slice(0, 8) + '）';
-  } catch (e) {
-    $('L_driveStatus').textContent = 'Drive 同步失敗：' + e.message + '（日誌仍存本機）';
+  if (!url) { docStatus('Google Doc 未設定：' + DOCQ.length + ' 筆紀錄待送（設定貼上同步網址後會自動補送）'); return; }
+  if (docFlushing) return;
+  docFlushing = true;
+  let sent = 0;
+  while (DOCQ.length) {
+    try {
+      await fetch(url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(DOCQ[0]) });
+      DOCQ.shift(); sent++;
+      saveJSON(QKEY, DOCQ);
+    } catch (e) { break; }
   }
-  syncing = false;
+  docFlushing = false;
+  if (DOCQ.length) docStatus('Google Doc 同步中斷：已送 ' + sent + ' 筆，剩 ' + DOCQ.length + ' 筆待補送（下次分析或按補送會再試）');
+  else if (sent) docStatus('✅ 已記錄到 Google Doc（' + sent + ' 筆，' + new Date().toTimeString().slice(0, 8) + '）');
 }
 
 $('L_btnLoad').addEventListener('click', async () => {
@@ -544,7 +495,7 @@ $('L_tbody').addEventListener('click', async (e) => {
     if (prov === 'gemini' && (!SET.geminiKey || !SET.geminiKey.trim())) { alert('先在專區設定填 Gemini API Key 並儲存'); return; }
     if (prov === 'local' && !(await pingLocal())) { alert('連不上本地模型：確認 llama-server 有開、位址正確、在同一臺電腦開網站'); return; }
     btn.disabled = true; btn.textContent = '分析中…';
-    try { await analyzeBatch([s], prov); syncDriveLog(); }
+    try { await analyzeBatch([s], prov); }
     catch (err) { alert('分析失敗：' + err.message); }
     renderL();
   }
@@ -560,15 +511,12 @@ $('S_form').addEventListener('submit', (e) => {
   SET.model = $('S_model').value || 'gemini-2.5-flash,gemini-2.5-flash-lite';
   SET.grounding = $('S_grounding').value;
   SET.batch = $('S_batch').value;
-  SET.driveClientId = $('S_driveClient').value;
+  SET.docUrl = $('S_docUrl').value.trim();
   saveJSON(SKEY, SET);
   $('S_status').textContent = '已儲存（' + new Date().toTimeString().slice(0, 8) + '）';
+  flushDocQueue();
 });
-$('L_btnSync').addEventListener('click', async () => {
-  if (!SET.driveClientId) { alert('先在專區設定填 Drive Client ID 並儲存'); return; }
-  try { await getToken(); } catch (e) { $('L_driveStatus').textContent = 'Drive 授權失敗：' + e.message; return; }
-  syncDriveLog();
-});
+$('L_btnSync').addEventListener('click', () => { flushDocQueue(true); });
 $('L_btnDownloadLog').addEventListener('click', () => {
   const md = buildLog(todayStr());
   if (!md) { alert('今日尚無日誌'); return; }
@@ -608,9 +556,28 @@ $('S_geminiKey').value = SET.geminiKey || '';
 $('S_model').value = SET.model || 'gemini-2.5-flash,gemini-2.5-flash-lite';
 $('S_grounding').value = SET.grounding || '1';
 $('S_batch').value = SET.batch || '5';
-$('S_driveClient').value = SET.driveClientId || '';
+$('S_docUrl').value = SET.docUrl || '';
+$('S_btnTestDoc').addEventListener('click', async () => {
+  const url = $('S_docUrl').value.trim();
+  const el = $('S_docStatus');
+  if (!url) { el.textContent = '先貼上 Apps Script 網址並儲存設定'; return; }
+  el.textContent = '送出測試中…';
+  try {
+    await fetch(url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify({ test: true, time: new Date().toTimeString().slice(0, 5) }) });
+    el.textContent = '已送出測試 — 去你的 Google Doc 看看有沒有出現「✅ 連線測試」那行（沒出現的話檢查部署存取權是否為「任何人」）';
+  } catch (e) {
+    el.textContent = '❌ 連不上：' + e.message + '（檢查網址是否以 /exec 結尾、部署是否完成）';
+  }
+});
+$('btnCopyGas').addEventListener('click', async () => {
+  const btn = $('btnCopyGas');
+  try { await navigator.clipboard.writeText($('gasCode').textContent); btn.textContent = '✅ 已複製，去 Apps Script 貼上'; }
+  catch (e) { btn.textContent = '複製失敗：手動全選下方程式碼複製'; }
+  setTimeout(() => { btn.textContent = '複製 Apps Script 腳本'; }, 3000);
+});
 renderL();
 updateLogView();
+flushDocQueue();
 
 // ===== 詳情 / 比較彈窗 =====
 function showModal(html) { $('modalContent').innerHTML = html; $('modalOverlay').style.display = 'flex'; }
