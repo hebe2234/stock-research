@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stock Research 選股研究台</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif; margin: 0; background: #f6f7f9; color: #1c2733; }
+  header { background: #14324f; color: #fff; padding: 18px 22px; }
+  header h1 { margin: 0; font-size: 22px; }
+  header p { margin: 6px 0 0; font-size: 13px; opacity: .85; }
+  main { max-width: 1280px; margin: 0 auto; padding: 18px 14px 40px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .toolbar input[type="search"], .toolbar select { padding: 8px 10px; border: 1px solid #c6cdd4; border-radius: 6px; font-size: 14px; background: #fff; }
+  button { padding: 8px 14px; border: 0; border-radius: 6px; font-size: 14px; cursor: pointer; background: #14324f; color: #fff; }
+  button.secondary { background: #e3e8ee; color: #14324f; }
+  button.danger { background: #fbe9e7; color: #b3261e; }
+  button.small { padding: 4px 9px; font-size: 12.5px; }
+  .tablewrap { overflow-x: auto; background: #fff; border: 1px solid #dde3e9; border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; white-space: nowrap; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid #edf0f3; text-align: left; vertical-align: top; }
+  th { background: #eef2f6; font-weight: 600; }
+  tr.detail td { background: #fbfcfe; white-space: normal; font-size: 13px; line-height: 1.55; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: #e3e8ee; }
+  .pill.watch { background: #e3e8ee; } .pill.research { background: #fff3cd; }
+  .pill.consider { background: #d1e7dd; } .pill.hold { background: #cfe2ff; }
+  .stars { color: #e8a100; letter-spacing: 1px; }
+  .empty { padding: 34px; text-align: center; color: #5b6b7a; }
+  form.panel { background: #fff; border: 1px solid #dde3e9; border-radius: 8px; padding: 16px; margin-bottom: 14px; }
+  form.panel h2 { margin: 0 0 12px; font-size: 17px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px 14px; }
+  .grid label { display: block; font-size: 12.5px; color: #45566a; margin-bottom: 3px; }
+  .grid input, .grid select, .grid textarea { width: 100%; padding: 7px 9px; border: 1px solid #c6cdd4; border-radius: 6px; font-size: 14px; }
+  .grid .wide { grid-column: span 2; }
+  .formactions { margin-top: 14px; display: flex; gap: 8px; }
+  footer { max-width: 1280px; margin: 0 auto; padding: 0 14px 26px; font-size: 12.5px; color: #5b6b7a; line-height: 1.6; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📈 Stock Research 選股研究台</h1>
+  <p>基本面為主、消息面為輔的選股研究整理。資料存在本機瀏覽器，請定期用「匯出備份」存 JSON。</p>
+</header>
+<main>
+  <div class="toolbar">
+    <input type="search" id="q" placeholder="搜尋代號 / 公司 / 產業…" size="26">
+    <select id="sortBy">
+      <option value="score">排序：基本面評分</option>
+      <option value="earnings">排序：下次財報（近→遠）</option>
+      <option value="ticker">排序：代號</option>
+      <option value="updated">排序：最近更新</option>
+    </select>
+    <button id="btnAdd">＋ 新增股票</button>
+    <button class="secondary" id="btnExport">匯出備份</button>
+    <button class="secondary" id="btnImport">匯入</button>
+    <input type="file" id="fileImport" accept=".json" hidden>
+  </div>
+
+  <form class="panel" id="formPanel" hidden>
+    <h2 id="formTitle">新增股票</h2>
+    <div class="grid">
+      <div><label>代號 *</label><input id="f_ticker" required placeholder="如 NVDA"></div>
+      <div><label>公司名稱</label><input id="f_name" placeholder="如 NVIDIA"></div>
+      <div><label>產業</label><input id="f_sector" placeholder="如 半導體"></div>
+      <div><label>狀態</label>
+        <select id="f_status">
+          <option value="watch">觀察中</option>
+          <option value="research">研究中</option>
+          <option value="consider">考慮買入</option>
+          <option value="hold">持有</option>
+        </select></div>
+      <div><label>現價 ($)</label><input id="f_price" type="number" step="any" min="0"></div>
+      <div><label>目標價 ($)</label><input id="f_target" type="number" step="any" min="0"></div>
+      <div><label>營收成長 YoY (%)</label><input id="f_rev" type="number" step="any"></div>
+      <div><label>EPS 成長 YoY (%)</label><input id="f_eps" type="number" step="any"></div>
+      <div><label>毛利率 (%)</label><input id="f_gm" type="number" step="any"></div>
+      <div><label>ROE (%)</label><input id="f_roe" type="number" step="any"></div>
+      <div><label>自由現金流 FCF ($M)</label><input id="f_fcf" type="number" step="any"></div>
+      <div><label>負債/權益 D/E</label><input id="f_de" type="number" step="any"></div>
+      <div><label>P/E</label><input id="f_pe" type="number" step="any"></div>
+      <div><label>PEG</label><input id="f_peg" type="number" step="any"></div>
+      <div><label>基本面評分 (1-5)</label>
+        <select id="f_score">
+          <option value="0">未評分</option><option value="1">1</option><option value="2">2</option>
+          <option value="3">3</option><option value="4">4</option><option value="5">5</option>
+        </select></div>
+      <div><label>下次財報日</label><input id="f_earnings" type="date"></div>
+      <div class="wide"><label>消息面 / 催化劑</label><input id="f_catalyst" placeholder="如 財報指引上調、產品發表、產業政策…"></div>
+      <div class="wide"><label>研究筆記</label><textarea id="f_notes" rows="4" placeholder="護城河、競爭、風險、買入理由與價位…"></textarea></div>
+    </div>
+    <div class="formactions">
+      <button type="submit">儲存</button>
+      <button type="button" class="secondary" id="btnCancel">取消</button>
+    </div>
+  </form>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th>代號</th><th>公司</th><th>產業</th><th class="num">現價</th><th class="num">目標價</th>
+        <th class="num">營收成長</th><th class="num">EPS成長</th><th class="num">ROE</th>
+        <th class="num">P/E</th><th class="num">PEG</th><th>評分</th><th>狀態</th><th>下次財報</th><th>操作</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="empty" id="emptyState">尚無資料。按「＋ 新增股票」開始整理第一檔。</div>
+  </div>
+</main>
+<footer>
+  使用方式：每研究一檔就新增一筆，基本面數字以最新一季財報（10-Q / earnings release）為準並記下日期；消息面欄位記催化劑與事件日期。
+  評分是自己的判斷（1-5），不是買賣建議。資料只存在這台裝置的瀏覽器 localStorage，換裝置或清快取前先匯出備份。
+</footer>
+<script src="app.js?v=1"></script>
+</body>
+</html>
