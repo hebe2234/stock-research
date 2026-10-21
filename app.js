@@ -146,6 +146,7 @@ let SET = loadJSON(SKEY, { geminiKey: '', model: 'gemini-2.5-flash', grounding: 
 SET.provider = SET.provider || 'gemini';
 SET.localEndpoint = SET.localEndpoint || 'http://localhost:8080';
 SET.localModel = SET.localModel || 'qwen3-coder-30b-a3b-instruct-q4_k_m.gguf';
+SET.localApiKey = SET.localApiKey || '';
 SET.localNews = SET.localNews || '1';
 let DRV = loadJSON(DKEY, { folderId: '', files: {} });
 let LexpandedId = null;
@@ -292,7 +293,9 @@ async function pingLocal() {
     const ep = (SET.localEndpoint || 'http://localhost:8080').replace(/\/+$/, '');
     const ctl = new AbortController();
     const to = setTimeout(() => ctl.abort(), 8000);
-    const r = await fetch(ep + '/v1/models', { signal: ctl.signal });
+    const opts = { signal: ctl.signal };
+    if (SET.localApiKey) opts.headers = { 'Authorization': 'Bearer ' + SET.localApiKey.trim() };
+    const r = await fetch(ep + '/v1/models', opts);
     clearTimeout(to);
     return r.ok;
   } catch (e) { return false; }
@@ -300,9 +303,11 @@ async function pingLocal() {
 
 async function localCall(prompt) {
   const ep = (SET.localEndpoint || 'http://localhost:8080').replace(/\/+$/, '');
+  const headers = { 'Content-Type': 'application/json' };
+  if (SET.localApiKey) headers['Authorization'] = 'Bearer ' + SET.localApiKey.trim();
   let r;
   try {
-    r = await fetch(ep + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: SET.localModel || 'local', messages: [{ role: 'user', content: prompt }], temperature: 0.3 }) });
+    r = await fetch(ep + '/v1/chat/completions', { method: 'POST', headers: headers, body: JSON.stringify({ model: SET.localModel || 'local', messages: [{ role: 'user', content: prompt }], temperature: 0.3, max_tokens: 4096 }) });
   } catch (e) { throw new Error('LOCALDOWN: ' + e.message); }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error('本地模型 ' + r.status + '：' + ((j.error && j.error.message) || ''));
@@ -377,7 +382,7 @@ async function runAnalysis() {
   if (SET.driveClientId) { try { await getToken(); } catch (e) { $('L_driveStatus').textContent = 'Drive 授權失敗：' + e.message + '（日誌仍會存本機）'; } }
   const targets = L.list.filter(s => { const r = L.results[s.ticker]; return !r || r.err; });
   if (!targets.length) { $('L_progress').textContent = '本週榜單已全部分析完'; return; }
-  const batchSize = Math.max(1, parseInt(SET.batch, 10) || 5);
+  const batchSize = SET.provider === 'local' ? 1 : Math.max(1, parseInt(SET.batch, 10) || 5);
   const batches = [];
   for (let i = 0; i < targets.length; i += batchSize) batches.push(targets.slice(i, i + batchSize));
   running = true; stopFlag = false;
@@ -533,6 +538,7 @@ $('S_form').addEventListener('submit', (e) => {
   SET.provider = $('S_provider').value;
   SET.localEndpoint = $('S_localEndpoint').value;
   SET.localModel = $('S_localModel').value;
+  SET.localApiKey = $('S_localApiKey').value;
   SET.localNews = $('S_localNews').value;
   SET.geminiKey = $('S_geminiKey').value;
   SET.model = $('S_model').value || 'gemini-2.5-flash,gemini-2.5-flash-lite';
@@ -561,6 +567,7 @@ $('L_btnDownloadLog').addEventListener('click', () => {
 $('S_provider').value = SET.provider || 'gemini';
 $('S_localEndpoint').value = SET.localEndpoint || 'http://localhost:8080';
 $('S_localModel').value = SET.localModel || 'qwen3-coder-30b-a3b-instruct-q4_k_m.gguf';
+$('S_localApiKey').value = SET.localApiKey || '';
 $('S_localNews').value = SET.localNews || '1';
 $('S_btnTestLocal').addEventListener('click', async () => {
   const ep = $('S_localEndpoint').value.replace(/\/+$/, '');
@@ -568,7 +575,10 @@ $('S_btnTestLocal').addEventListener('click', async () => {
   try {
     const ctl = new AbortController();
     const to = setTimeout(() => ctl.abort(), 8000);
-    const r = await fetch(ep + '/v1/models', { signal: ctl.signal });
+    const opts = { signal: ctl.signal };
+    const key = $('S_localApiKey').value.trim();
+    if (key) opts.headers = { 'Authorization': 'Bearer ' + key };
+    const r = await fetch(ep + '/v1/models', opts);
     clearTimeout(to);
     const j = await r.json().catch(() => ({}));
     const ids = (j.data || []).map(m => m.id).join(', ');
