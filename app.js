@@ -143,6 +143,10 @@ const DKEY = 'stockResearch.drive';
 let L = loadJSON(LKEY, { weekKey: '', fetchedAt: '', list: [], results: {} });
 let ARCH = loadJSON(AKEY, []);
 let SET = loadJSON(SKEY, { geminiKey: '', model: 'gemini-2.5-flash', grounding: '1', driveClientId: '' });
+SET.provider = SET.provider || 'gemini';
+SET.localEndpoint = SET.localEndpoint || 'http://localhost:8080';
+SET.localModel = SET.localModel || 'qwen3-coder-30b-a3b-instruct-q4_k_m.gguf';
+SET.localNews = SET.localNews || '1';
 let DRV = loadJSON(DKEY, { folderId: '', files: {} });
 let LexpandedId = null;
 let running = false, stopFlag = false;
@@ -225,10 +229,15 @@ function models() {
   return list;
 }
 
-function buildBatchPrompt(batch) {
-  const lines = batch.map(s => '- ' + s.ticker + '（' + s.name + '，產業：' + (s.sector || '未知') + '）：本週漲跌 ' + (s.chgW == null ? '?' : s.chgW.toFixed(1)) + '%，現價 $' + s.price + '，市值約 ' + fmtMcap(s.mcap)).join('\n');
+function buildBatchPrompt(batch, newsMap) {
+  const lines = batch.map(s => {
+    let line = '- ' + s.ticker + '（' + s.name + '，產業：' + (s.sector || '未知') + '）：本週漲跌 ' + (s.chgW == null ? '?' : s.chgW.toFixed(1)) + '%，現價 $' + s.price + '，市值約 ' + fmtMcap(s.mcap);
+    const nw = newsMap && newsMap[s.ticker];
+    if (nw) line += '\n  近期新聞標題：' + nw;
+    return line;
+  }).join('\n');
   return '你是股票分析師，用第一性原理逐一分析以下美股本週大跌的原因。清單：\n' + lines +
-    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面），然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
+    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）；若附了近期新聞標題可作線索，沒有即時資訊時就在 dropCause 註明資訊有限。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
     '{"ticker":"代號","dropCause":"下跌主因，一段話，註明消息日期","category":"基本面惡化|消息面一次性衝擊|市場情緒/資金面|產業系統性|不明",' +
     '"irrational":"是|否|部分","irrationalReason":"為什麼這樣判斷，公司核心基本面是否實質受損","reboundProb":0到100的整數（未來1到3個月漲回本週下跌前價位的機率）,' +
     '"keyPoints":"投資人該觀察的2到3個驗證點"}';
@@ -264,6 +273,56 @@ async function geminiCall(prompt) {
   throw lastErr || new Error('Gemini 呼叫失敗');
 }
 
+async function fetchNews(s) {
+  try {
+    const name = (s.name || s.ticker).replace(/\b(Inc|Corp|Corporation|Ltd|Limited|PLC|SA|NV|AG|Co|Company|Holdings|Group)\b\.?/gi, '').trim();
+    const q = encodeURIComponent('"' + name + '" stock');
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch('https://api.gdeltproject.org/api/v2/doc/doc?query=' + q + '&mode=artlist&maxrecords=5&timespan=1week&sort=datedesc&format=json', { signal: ctl.signal });
+    clearTimeout(to);
+    if (!r.ok) return '';
+    const j = await r.json();
+    return (j.articles || []).slice(0, 5).map(a => (a.title || '') + '（' + (a.domain || '') + ' ' + (a.seendate || '').slice(0, 8) + '）').join('；');
+  } catch (e) { return ''; }
+}
+
+async function pingLocal() {
+  try {
+    const ep = (SET.localEndpoint || 'http://localhost:8080').replace(/\/+$/, '');
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(ep + '/v1/models', { signal: ctl.signal });
+    clearTimeout(to);
+    return r.ok;
+  } catch (e) { return false; }
+}
+
+async function localCall(prompt) {
+  const ep = (SET.localEndpoint || 'http://localhost:8080').replace(/\/+$/, '');
+  let r;
+  try {
+    r = await fetch(ep + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: SET.localModel || 'local', messages: [{ role: 'user', content: prompt }], temperature: 0.3 }) });
+  } catch (e) { throw new Error('LOCALDOWN: ' + e.message); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error('本地模型 ' + r.status + '：' + ((j.error && j.error.message) || ''));
+  const text = ((((j.choices || [])[0] || {}).message || {}).content || '');
+  if (!text) throw new Error('本地模型回覆空白');
+  return { text: text, model: 'local:' + (SET.localModel || '') };
+}
+
+async function callLLM(batch) {
+  if (SET.provider === 'local') {
+    let newsMap = null;
+    if (SET.localNews !== '0') {
+      newsMap = {};
+      for (const s of batch) newsMap[s.ticker] = await fetchNews(s);
+    }
+    return localCall(buildBatchPrompt(batch, newsMap));
+  }
+  return geminiCall(buildBatchPrompt(batch));
+}
+
 function parseBatch(text) {
   let t = text.trim().replace(/```json/gi, '').replace(/```/g, '').trim();
   const map = {};
@@ -288,7 +347,7 @@ function parseBatch(text) {
 }
 
 async function analyzeBatch(batch) {
-  const out = await geminiCall(buildBatchPrompt(batch));
+  const out = await callLLM(batch);
   const map = parseBatch(out.text);
   const at = new Date().toISOString();
   for (const s of batch) {
@@ -307,8 +366,14 @@ async function analyzeOne(s) { await analyzeBatch([s]); }
 
 async function runAnalysis() {
   if (running) return;
-  if (!SET.geminiKey || !SET.geminiKey.trim()) { alert('先在專區設定填 Gemini API Key 並儲存'); $('S_geminiKey').focus(); return; }
+  if (SET.provider !== 'local' && (!SET.geminiKey || !SET.geminiKey.trim())) { alert('先在專區設定填 Gemini API Key 並儲存'); $('S_geminiKey').focus(); return; }
   if (!L.list.length) { alert('先載入本週大跌榜'); return; }
+  if (SET.provider === 'local') {
+    $('L_progress').textContent = '連線本地模型中…';
+    const okPing = await pingLocal();
+    if (!okPing) { $('L_progress').textContent = '連不上本地模型：確認 llama-server 已啟動、endpoint 位址正確，且是在跑 llama 的那臺電腦開這個網站。'; return; }
+    $('L_progress').textContent = '';
+  }
   if (SET.driveClientId) { try { await getToken(); } catch (e) { $('L_driveStatus').textContent = 'Drive 授權失敗：' + e.message + '（日誌仍會存本機）'; } }
   const targets = L.list.filter(s => { const r = L.results[s.ticker]; return !r || r.err; });
   if (!targets.length) { $('L_progress').textContent = '本週榜單已全部分析完'; return; }
@@ -326,12 +391,13 @@ async function runAnalysis() {
       await analyzeBatch(batch); okCount += batch.length;
       syncDriveLog();
     } catch (e) {
+      if (/^LOCALDOWN:/.test(e.message) || /Failed to fetch/i.test(e.message)) { $('L_progress').textContent = '連不上本地模型，先停下：確認 llama-server 有開、位址正確、在同一臺電腦開網站。'; break; }
       if (/^QUOTA:/.test(e.message)) { $('L_progress').textContent = '所有模型的免費額度都用完了，剩下的明天按「開始分析」會接著跑。'; break; }
       if (/401|403|API key/i.test(e.message)) { $('L_progress').textContent = 'Gemini 金鑰有問題，先停下：' + e.message; break; }
       for (const s of batch) { L.results[s.ticker] = { err: e.message, at: new Date().toISOString() }; }
       saveJSON(LKEY, L); renderL();
     }
-    if (!stopFlag) await sleep(6500);
+    if (!stopFlag) await sleep(SET.provider === 'local' ? 1000 : 6500);
   }
   running = false;
   $('L_btnRun').disabled = false; $('L_btnStop').disabled = true;
@@ -455,7 +521,7 @@ $('L_tbody').addEventListener('click', async (e) => {
   if (!s) return;
   if (btn.dataset.lact === 'detail') { LexpandedId = LexpandedId === t ? null : t; renderL(); return; }
   if (btn.dataset.lact === 'one') {
-    if (!SET.geminiKey || !SET.geminiKey.trim()) { alert('先在專區設定填 Gemini API Key 並儲存'); return; }
+    if (SET.provider !== 'local' && (!SET.geminiKey || !SET.geminiKey.trim())) { alert('先在專區設定填 Gemini API Key 並儲存'); return; }
     btn.disabled = true; btn.textContent = '分析中…';
     try { await analyzeOne(s); syncDriveLog(); }
     catch (err) { alert('分析失敗：' + err.message); }
@@ -464,6 +530,10 @@ $('L_tbody').addEventListener('click', async (e) => {
 });
 $('S_form').addEventListener('submit', (e) => {
   e.preventDefault();
+  SET.provider = $('S_provider').value;
+  SET.localEndpoint = $('S_localEndpoint').value;
+  SET.localModel = $('S_localModel').value;
+  SET.localNews = $('S_localNews').value;
   SET.geminiKey = $('S_geminiKey').value;
   SET.model = $('S_model').value || 'gemini-2.5-flash,gemini-2.5-flash-lite';
   SET.grounding = $('S_grounding').value;
@@ -486,6 +556,26 @@ $('L_btnDownloadLog').addEventListener('click', () => {
   a.download = todayStr() + '.md';
   a.click();
   URL.revokeObjectURL(a.href);
+});
+
+$('S_provider').value = SET.provider || 'gemini';
+$('S_localEndpoint').value = SET.localEndpoint || 'http://localhost:8080';
+$('S_localModel').value = SET.localModel || 'qwen3-coder-30b-a3b-instruct-q4_k_m.gguf';
+$('S_localNews').value = SET.localNews || '1';
+$('S_btnTestLocal').addEventListener('click', async () => {
+  const ep = $('S_localEndpoint').value.replace(/\/+$/, '');
+  $('S_localStatus').textContent = '測試中…';
+  try {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(ep + '/v1/models', { signal: ctl.signal });
+    clearTimeout(to);
+    const j = await r.json().catch(() => ({}));
+    const ids = (j.data || []).map(m => m.id).join(', ');
+    $('S_localStatus').textContent = r.ok ? ('✅ 連上了：' + (ids || '有回應')) : ('❌ 伺服器回應 ' + r.status);
+  } catch (e) {
+    $('S_localStatus').textContent = '❌ 連不上：' + e.message + '（確認 llama-server 有開、且在這臺電腦開網站）';
+  }
 });
 
 $('S_geminiKey').value = SET.geminiKey || '';
