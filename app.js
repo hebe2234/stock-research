@@ -257,7 +257,7 @@ function buildBatchPrompt(batch, newsMap) {
   const nowD = new Date();
   const today = nowD.getFullYear() + ' 年 ' + (nowD.getMonth() + 1) + ' 月 ' + nowD.getDate() + ' 日';
   return '今天是 ' + today + '。你是股票分析師，用第一性原理逐一分析以下美股本週（最近 7 天）大跌的原因。清單：\n' + lines +
-    '\n【日期規則】新聞標題後括號內是該新聞的發布日期；dropCause 裡註明的消息日期必須照抄新聞的日期，或只寫相對時間（例如「本週」），嚴禁自行推測年份，絕對不要寫成過去的年份。' +
+    '\n【日期規則】新聞標題後括號內是該新聞的發布日期。禁止使用「本週、上週、今年、去年、近期、近日、最近、本月」等相對時間詞：dropCause 裡寫到任何消息或事件，一律註明確切日期（YYYY-MM-DD，照抄新聞的日期）；只知道月份就寫 YYYY-MM；日期不明就寫「日期不詳」；嚴禁自行推測年份，絕對不要寫成過去的年份。【誠實規則】沒有資料就明寫「無資料」，嚴禁用推測冒充事實；要推測可以，但必須標明「推測」。' +
     '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）。【資訊規則】有附查證資訊的，必須以其為主要依據，不得忽略另編原因；沒有附查證資訊的，dropCause 開頭必須寫「（無即時新聞可查）」，只能依股價表現做保守推測，嚴禁編造具體事件、數字或日期。【查證規則】每檔先用搜尋查證該代號目前的上市狀態（注意近期 IPO、更名、併購、下市）；清單裡的股價、市值、漲跌幅都是真實市場數據，若第一時間查不到公司，換關鍵字（代號＋IPO、代號＋Nasdaq、公司名＋stock）再查，不可用「私人公司／未上市／不存在」當結論，除非搜尋證據明確支持。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
     '{"ticker":"代號","dropCause":"下跌主因，一段話，註明消息日期","category":"基本面惡化|消息面一次性衝擊|市場情緒/資金面|產業系統性|不明",' +
     '"irrational":"是|否|部分","irrationalReason":"為什麼這樣判斷，公司核心基本面是否實質受損","reboundProb":0到100的整數（未來1到3個月漲回本週下跌前價位的機率）,' +
@@ -736,7 +736,7 @@ $('S_btnTestSync').addEventListener('click', async () => {
     else el.textContent = '❌ 連線失敗（' + r.status + '）';
   } catch (e) { el.textContent = '❌ 連線失敗：' + e.message; }
 });
-$('L_ver').textContent = 'v3.2';
+$('L_ver').textContent = 'v3.3';
 renderL();
 updateLogView();
 syncNow(false);
