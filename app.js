@@ -241,7 +241,10 @@ function buildBatchPrompt(batch, newsMap) {
     if (nw) line += '\n  近期新聞標題：' + nw;
     return line;
   }).join('\n');
-  return '你是股票分析師，用第一性原理逐一分析以下美股本週大跌的原因。清單：\n' + lines +
+  const nowD = new Date();
+  const today = nowD.getFullYear() + ' 年 ' + (nowD.getMonth() + 1) + ' 月 ' + nowD.getDate() + ' 日';
+  return '今天是 ' + today + '。你是股票分析師，用第一性原理逐一分析以下美股本週（最近 7 天）大跌的原因。清單：\n' + lines +
+    '\n【日期規則】新聞標題後括號內是該新聞的發布日期；dropCause 裡註明的消息日期必須照抄新聞的日期，或只寫相對時間（例如「本週」），嚴禁自行推測年份，絕對不要寫成過去的年份。' +
     '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）；若附了近期新聞標題可作線索，沒有即時資訊時就在 dropCause 註明資訊有限。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
     '{"ticker":"代號","dropCause":"下跌主因，一段話，註明消息日期","category":"基本面惡化|消息面一次性衝擊|市場情緒/資金面|產業系統性|不明",' +
     '"irrational":"是|否|部分","irrationalReason":"為什麼這樣判斷，公司核心基本面是否實質受損","reboundProb":0到100的整數（未來1到3個月漲回本週下跌前價位的機率）,' +
@@ -288,7 +291,7 @@ async function fetchNews(s) {
     clearTimeout(to);
     if (!r.ok) return '';
     const j = await r.json();
-    return (j.articles || []).slice(0, 5).map(a => (a.title || '') + '（' + (a.domain || '') + ' ' + (a.seendate || '').slice(0, 8) + '）').join('；');
+    return (j.articles || []).slice(0, 5).map(a => { const d = (a.seendate || '').slice(0, 8); const ds = d.length === 8 ? d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) : d; return (a.title || '') + '（' + (a.domain || '') + '，' + ds + '）'; }).join('；');
   } catch (e) { return ''; }
 }
 
