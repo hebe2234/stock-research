@@ -719,6 +719,22 @@ function migrateResults() {
   if (changed) saveJSON(LKEY, L);
 }
 
+function clearProvider(prov, label) {
+  const n = L.list.filter(s => resOf(s.ticker, prov)).length;
+  if (!n) { alert('目前沒有 ' + label + ' 的分析結果'); return; }
+  if (!confirm('確定清空全部 ' + label + ' 分析結果（共 ' + n + ' 檔）？清空後要重跑才會再有。')) return;
+  for (const t of Object.keys(L.results)) {
+    const slot = L.results[t];
+    if (slot && slot[prov]) { delete slot[prov]; if (!slot.gemini && !slot.local) delete L.results[t]; }
+  }
+  ARCH = ARCH.filter(a => (a.provider || provOfRes(a.res)) !== prov);
+  saveJSON(LKEY, L);
+  saveJSON(AKEY, ARCH);
+  renderL(); updateLogView();
+}
+$('L_btnClearG').addEventListener('click', () => clearProvider('gemini', 'Gemini'));
+$('L_btnClearL').addEventListener('click', () => clearProvider('local', '本地模型'));
+
 migrateResults();
 renderL();
 updateLogView();
