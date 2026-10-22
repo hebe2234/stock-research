@@ -141,6 +141,10 @@ const AKEY = 'stockResearch.archive.v1';
 const SKEY = 'stockResearch.settings';
 let L = loadJSON(LKEY, { weekKey: '', fetchedAt: '', list: [], results: {} });
 let ARCH = loadJSON(AKEY, []);
+const TKEY = 'stockResearch.track.v1';
+const PKEY = 'stockResearch.picks.v1';
+let TRACK = loadJSON(TKEY, []);
+let PICKS = loadJSON(PKEY, []);
 let SET = loadJSON(SKEY, { geminiKey: '', model: 'gemini-2.5-flash', grounding: '1' });
 SET.provider = SET.provider || 'gemini';
 SET.localEndpoint = SET.localEndpoint || 'http://localhost:8080';
@@ -166,7 +170,7 @@ function markDataChanged() {
 }
 
 function loadJSON(k, dft) { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? dft : v; } catch (e) { return dft; } }
-function saveJSON(k, v) { localStorage.setItem(k, JSON.stringify(v)); if ((k === LKEY || k === AKEY) && !syncApplying) markDataChanged(); }
+function saveJSON(k, v) { localStorage.setItem(k, JSON.stringify(v)); if ((k === LKEY || k === AKEY || k === TKEY || k === PKEY) && !syncApplying) markDataChanged(); }
 function pad2(n) { return String(n).padStart(2, '0'); }
 function dateStr(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
 function todayStr() { return dateStr(new Date()); }
@@ -179,30 +183,46 @@ function probColor(p) { const n = Math.max(0, Math.min(100, Number(p) || 0)); re
 const FLAG_RE = /私人公司|未上市|尚未上市|沒有公開上市|未公開上市|不存在的公司|無法識別公司|private company|not (publicly )?(listed|traded)/i;
 function doneCount(prov) { return L.list.filter(s => { const r = resOf(s.ticker, prov); return r && !r.err; }).length; }
 
+const TV_COLS = ['name', 'description', 'close', 'change|1W', 'volume', 'market_cap_basic', 'sector', 'exchange'];
+function tvRow(d) { return { ticker: d[0], name: d[1], price: d[2], chgW: d[3], volume: d[4], mcap: d[5], sector: d[6], exchange: d[7] || '' }; }
+async function tvScan(extra) {
+  const body = Object.assign({ options: { lang: 'en' }, markets: ['america'], symbols: { query: { types: ['stock'] } }, columns: TV_COLS }, extra || {});
+  const r = await fetch('https://scanner.tradingview.com/america/scan', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('TradingView 回應 ' + r.status);
+  const j = await r.json();
+  return (j.data || []).map(x => tvRow(x.d));
+}
+
 async function fetchLosers() {
   $('L_weekLabel').textContent = '載入中…';
-  const body = {
+  const rows = await tvScan({
     filter: [
       { left: 'exchange', operation: 'in_range', right: ['NASDAQ', 'NYSE', 'AMEX'] },
       { left: 'close', operation: 'egreater', right: 5 },
       { left: 'market_cap_basic', operation: 'egreater', right: 300000000 }
     ],
-    options: { lang: 'en' },
-    markets: ['america'],
-    symbols: { query: { types: ['stock'] } },
-    columns: ['name', 'description', 'close', 'change|1W', 'volume', 'market_cap_basic', 'sector'],
     sort: { sortBy: 'change|1W', sortOrder: 'asc' },
     range: [0, 100]
-  };
-  const r = await fetch('https://scanner.tradingview.com/america/scan', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error('TradingView 回應 ' + r.status);
-  const j = await r.json();
+  });
   const wk = mondayKey();
   if (L.weekKey !== wk) L.results = {};
   L.weekKey = wk;
   L.fetchedAt = new Date().toISOString();
-  L.list = (j.data || []).map(x => { const d = x.d; return { ticker: d[0], name: d[1], price: d[2], chgW: d[3], volume: d[4], mcap: d[5], sector: d[6] }; });
+  L.list = rows;
   saveJSON(LKEY, L);
+}
+
+function sortedList() {
+  const arr = L.list.slice();
+  const prob = (s, prov) => { const r = resOf(s.ticker, prov); return (r && !r.err && typeof r.reboundProb === 'number') ? r.reboundProb : -1; };
+  switch (L.sort || 'drop') {
+    case 'probG': arr.sort((a, b) => prob(b, 'gemini') - prob(a, 'gemini')); break;
+    case 'probL': arr.sort((a, b) => prob(b, 'local') - prob(a, 'local')); break;
+    case 'mcap': arr.sort((a, b) => (b.mcap || 0) - (a.mcap || 0)); break;
+    case 'price': arr.sort((a, b) => (b.price || 0) - (a.price || 0)); break;
+    default: arr.sort((a, b) => (a.chgW == null ? 0 : a.chgW) - (b.chgW == null ? 0 : b.chgW));
+  }
+  return arr;
 }
 
 function detailHTML(s, res) {
@@ -223,7 +243,7 @@ function renderL() {
     : '';
   $('L_empty').style.display = L.list.length ? 'none' : 'block';
   if (L.list.length && !running) $('L_progress').textContent = 'Gemini ' + doneCount('gemini') + ' / ' + L.list.length + '・本地 ' + doneCount('local') + ' / ' + L.list.length;
-  $('L_tbody').innerHTML = L.list.map((s, i) => {
+  $('L_tbody').innerHTML = sortedList().map((s, i) => {
     const g = resOf(s.ticker, 'gemini'), l = resOf(s.ticker, 'local');
     const st = (r) => r ? (r.err ? '⚠️' : '✅') : '–';
     const status = 'G ' + st(g) + ' / 本 ' + st(l);
@@ -231,7 +251,8 @@ function renderL() {
     const irr = [irrPart('G', g), irrPart('本', l)].filter(Boolean).join('・') || '–';
     const probPart = (tag, r) => (r && !r.err && r.reboundProb !== '' && r.reboundProb != null) ? tag + ' <span style="color:' + probColor(r.reboundProb) + ';font-weight:700">' + r.reboundProb + '%</span>' : '';
     const prob = [probPart('G', g), probPart('本', l)].filter(Boolean).join('・') || '–';
-    let row = '<tr><td>' + (i + 1) + '</td><td><strong>' + esc(s.ticker) + '</strong></td><td class="ellipsis" title="' + esc(s.name) + '">' + esc(s.name) + '</td><td>' + esc(s.sector) + '</td>' +
+    const tracked = typeof isTracked === 'function' && isTracked(s.ticker);
+    let row = '<tr><td>' + (i + 1) + '</td><td><input type="checkbox" data-track="' + esc(s.ticker) + '"' + (tracked ? ' checked disabled' : '') + ' title="加入追蹤專區" style="width:16px;height:16px;cursor:pointer"></td><td><strong>' + esc(s.ticker) + '</strong></td><td class="ellipsis" title="' + esc(s.name) + '">' + esc(s.name) + '</td><td>' + esc(s.sector) + '</td>' +
       '<td class="num">' + num(s.price) + '</td><td class="num" style="color:#b3261e">' + (s.chgW == null ? '–' : s.chgW.toFixed(1) + '%') + '</td>' +
       '<td class="num">' + fmtMcap(s.mcap) + '</td><td>' + status + '</td><td>' + irr + '</td><td class="num">' + prob + '</td>' +
       '<td><button class="small secondary" data-lact="g" data-t="' + esc(s.ticker) + '">Gemini</button> ' +
@@ -567,7 +588,7 @@ function stripRes(res) { if (!res) return res; const c = Object.assign({}, res);
 function collectState() {
   const results = {};
   for (const t of Object.keys(L.results)) { const s = L.results[t] || {}; const o = {}; if (s.gemini) o.gemini = stripRes(s.gemini); if (s.local) o.local = stripRes(s.local); results[t] = o; }
-  return { v: 1, updatedAt: syncMeta.updatedAt || '', watchlist: stocks, losers: { weekKey: L.weekKey, fetchedAt: L.fetchedAt, list: L.list, results: results }, arch: ARCH.map(a => { const c = Object.assign({}, a); c.res = stripRes(a.res); return c; }) };
+  return { v: 1, updatedAt: syncMeta.updatedAt || '', watchlist: stocks, losers: { weekKey: L.weekKey, fetchedAt: L.fetchedAt, list: L.list, results: results }, arch: ARCH.map(a => { const c = Object.assign({}, a); c.res = stripRes(a.res); return c; }), track: TRACK, picks: PICKS };
 }
 function mergeWatch(a, b) {
   const m = new Map();
@@ -600,13 +621,15 @@ function mergeFromRemote(remote) {
   syncApplying = true;
   stocks = mergeWatch(stocks, remote.watchlist || []);
   ARCH = mergeArch(ARCH, remote.arch || []);
+  TRACK = mergeTrack(TRACK, remote.track || []);
+  PICKS = mergePicks(PICKS, remote.picks || []);
   if (remote.losers) {
     if ((remote.losers.list || []).length && (remote.losers.weekKey || '') >= (L.weekKey || '')) { L.list = remote.losers.list; L.weekKey = remote.losers.weekKey; L.fetchedAt = remote.losers.fetchedAt || L.fetchedAt; }
     L.results = mergeResults(L.results, remote.losers.results || {});
   }
-  save(); saveJSON(LKEY, L); saveJSON(AKEY, ARCH);
+  save(); saveJSON(LKEY, L); saveJSON(AKEY, ARCH); saveJSON(TKEY, TRACK); saveJSON(PKEY, PICKS);
   syncApplying = false;
-  render(); renderL(); updateLogView();
+  render(); renderL(); updateLogView(); renderTrack(); renderPicks();
 }
 function scheduleSync() {
   try { if (!syncCfg()) return; } catch (e) { return; }
@@ -646,6 +669,14 @@ async function syncNow(manual) {
 $('L_btnLoad').addEventListener('click', async () => {
   try { await fetchLosers(); renderL(); }
   catch (e) { $('L_weekLabel').textContent = '載入失敗：' + e.message; }
+});
+$('L_sort').value = L.sort || 'drop';
+$('L_sort').addEventListener('change', () => { L.sort = $('L_sort').value; saveJSON(LKEY, L); renderL(); });
+$('L_tbody').addEventListener('change', (e) => {
+  const cb = e.target.closest('input[data-track]');
+  if (!cb || !cb.checked) return;
+  const s = L.list.find(x => x.ticker === cb.dataset.track);
+  if (s) { addTrack(s); renderTrack(); renderL(); }
 });
 $('L_btnRun').addEventListener('click', runAnalysis);
 $('L_btnStop').addEventListener('click', () => { stopFlag = true; $('L_progress').textContent = '已停止（進度有存，下次按開始會接著跑）'; });
@@ -741,7 +772,7 @@ $('S_btnTestSync').addEventListener('click', async () => {
     else el.textContent = '❌ 連線失敗（' + r.status + '）';
   } catch (e) { el.textContent = '❌ 連線失敗：' + e.message; }
 });
-$('L_ver').textContent = 'v3.5';
+$('L_ver').textContent = 'v3.6';
 renderL();
 updateLogView();
 syncNow(false);
@@ -844,3 +875,205 @@ document.querySelectorAll('details.grp').forEach(d => {
   try { const v = localStorage.getItem(k); if (v === '1') d.open = true; else if (v === '0') d.open = false; } catch (e) {}
   d.addEventListener('toggle', () => { try { localStorage.setItem(k, d.open ? '1' : '0'); } catch (e) {} });
 });
+
+// ===== 📌 追蹤專區 =====
+function isTracked(t) { return TRACK.some(x => x.ticker === t); }
+function addTrack(s) {
+  if (!s || isTracked(s.ticker)) return;
+  TRACK.push({ ticker: s.ticker, name: s.name || '', sector: s.sector || '', exchange: s.exchange || '', addedAt: todayStr(), addedPrice: (s.price == null ? null : s.price), addedChgW: (s.chgW == null ? null : s.chgW), price: (s.price == null ? null : s.price), chgW: (s.chgW == null ? null : s.chgW), mcap: s.mcap || null, priceAt: '' });
+  saveJSON(TKEY, TRACK);
+}
+function removeTrack(t) {
+  TRACK = TRACK.filter(x => x.ticker !== t);
+  saveJSON(TKEY, TRACK);
+  renderTrack(); renderL();
+}
+function mergeTrack(a, b) {
+  const m = new Map();
+  for (const x of (a || [])) m.set(x.ticker, x);
+  for (const x of (b || [])) {
+    const old = m.get(x.ticker);
+    if (!old) { m.set(x.ticker, x); continue; }
+    const keep = (x.addedAt || '') < (old.addedAt || '') ? x : old;         // 加入日期取較早（最初加入）
+    const fresh = (x.priceAt || '') > (old.priceAt || '') ? x : old;         // 現價取較新
+    m.set(x.ticker, Object.assign({}, keep, { price: fresh.price, chgW: fresh.chgW, mcap: fresh.mcap, priceAt: fresh.priceAt }));
+  }
+  return [...m.values()];
+}
+function trackHistCount(t) { return ARCH.filter(a => a.ticker === t).length; }
+function renderTrack() {
+  const tb = $('T_tbody'); if (!tb) return;
+  $('T_empty').style.display = TRACK.length ? 'none' : 'block';
+  const rows = TRACK.slice().sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || '') || a.ticker.localeCompare(b.ticker));
+  tb.innerHTML = rows.map(x => {
+    const since = (x.price != null && x.addedPrice) ? ((x.price / x.addedPrice - 1) * 100) : null;
+    const sinceTxt = since == null ? '–' : '<span style="color:' + (since >= 0 ? '#137333' : '#b3261e') + ';font-weight:700">' + (since >= 0 ? '+' : '') + since.toFixed(1) + '%</span>';
+    return '<tr><td><strong>' + esc(x.ticker) + '</strong></td><td class="ellipsis" title="' + esc(x.name) + '">' + esc(x.name) + '</td>' +
+      '<td>' + esc(x.addedAt || '') + '</td><td class="num">' + num(x.addedPrice) + '</td><td class="num">' + num(x.price) + '</td>' +
+      '<td class="num">' + sinceTxt + '</td><td class="num" style="color:#b3261e">' + (x.chgW == null ? '–' : x.chgW.toFixed(1) + '%') + '</td>' +
+      '<td>' + trackHistCount(x.ticker) + ' 筆</td>' +
+      '<td><button class="small secondary" data-tbtn="detail" data-t="' + esc(x.ticker) + '">詳情</button> ' +
+      '<button class="small danger" data-tbtn="remove" data-t="' + esc(x.ticker) + '">移除</button></td></tr>';
+  }).join('');
+}
+async function refreshTrackedPrices() {
+  if (!TRACK.length) { $('T_status').textContent = '尚無追蹤股票'; return; }
+  $('T_status').textContent = '刷新中…';
+  try {
+    const rows = await tvScan({ filter: [{ left: 'name', operation: 'in_range', right: TRACK.map(x => x.ticker) }], range: [0, TRACK.length] });
+    const map = {};
+    rows.forEach(r => { map[r.ticker] = r; });
+    let hit = 0;
+    TRACK.forEach(x => {
+      const m = map[x.ticker];
+      if (m) { x.price = m.price; x.chgW = m.chgW; x.mcap = m.mcap; if (m.exchange) x.exchange = m.exchange; x.priceAt = new Date().toISOString(); hit++; }
+    });
+    saveJSON(TKEY, TRACK);
+    renderTrack();
+    $('T_status').textContent = '已刷新 ' + hit + ' / ' + TRACK.length + ' 檔（' + new Date().toTimeString().slice(0, 5) + '）';
+  } catch (e) { $('T_status').textContent = '刷新失敗：' + e.message; }
+}
+function showTrackModal(t) {
+  const x = TRACK.find(v => v.ticker === t);
+  if (!x) return;
+  const since = (x.price != null && x.addedPrice) ? ((x.price / x.addedPrice - 1) * 100) : null;
+  const sym = (x.exchange ? x.exchange + ':' : '') + t;
+  let h = '<h3>' + esc(t) + ' ' + esc(x.name) + '</h3>' +
+    '<div>產業：' + esc(x.sector || '–') + '・加入追蹤：' + esc(x.addedAt || '') + '（當時 $' + num(x.addedPrice) + '、該週 ' + (x.addedChgW == null ? '–' : x.addedChgW.toFixed(1) + '%') + '）・現價 $' + num(x.price) +
+    '・自加入 ' + (since == null ? '–' : (since >= 0 ? '+' : '') + since.toFixed(1) + '%') + '</div>';
+  h += '<div style="margin:10px 0"><button class="small secondary" data-tact="rg" data-t="' + esc(t) + '">🤖 Gemini 重新分析</button> ' +
+    '<button class="small secondary" data-tact="rl" data-t="' + esc(t) + '">🖥️ 本地重新分析</button> ' +
+    '<span data-tact-msg style="font-size:12.5px;color:#45566a"></span></div>';
+  h += '<iframe title="股價圖" src="https://www.tradingview.com/widgetembed/?symbol=' + encodeURIComponent(sym) + '&interval=D&theme=light&style=1&locale=zh_TW&hide_side_toolbar=1&allow_symbol_change=0&save_image=0" style="width:100%;height:360px;border:1px solid #dde3e9;border-radius:8px" loading="lazy"></iframe>';
+  const hist = ARCH.filter(a => a.ticker === t).slice().sort((a, b) => ((b.date || '') + (b.res && b.res.at || '')).localeCompare((a.date || '') + (a.res && a.res.at || '')));
+  h += '<div class="k">🗂️ AI 分析日誌（依日期，新→舊）</div>';
+  if (!hist.length) h += '<div>尚無分析紀錄，用上方按鈕跑第一次分析。</div>';
+  for (const a of hist) {
+    h += '<div style="border-top:1px solid #eef2f6;padding:8px 0"><strong>' + esc(a.date || '') + '</strong>・' + ((a.provider || provOfRes(a.res)) === 'local' ? '🖥️ 本地模型' : '🤖 Gemini') + analysisInner(a.res) + '</div>';
+  }
+  showModal(h);
+}
+$('T_tbody').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-tbtn]');
+  if (!btn) return;
+  if (btn.dataset.tbtn === 'detail') showTrackModal(btn.dataset.t);
+  else if (btn.dataset.tbtn === 'remove') { if (confirm('把 ' + btn.dataset.t + ' 移出追蹤區？（分析日誌會保留）')) removeTrack(btn.dataset.t); }
+});
+$('T_btnRefresh').addEventListener('click', refreshTrackedPrices);
+$('modalContent').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-tact]');
+  if (!btn) return;
+  const t = btn.dataset.t;
+  const prov = btn.dataset.tact === 'rg' ? 'gemini' : 'local';
+  const msg = btn.parentElement.querySelector('[data-tact-msg]');
+  if (prov === 'gemini' && (!SET.geminiKey || !SET.geminiKey.trim())) { alert('先在專區設定填 Gemini API Key 並儲存'); return; }
+  if (prov === 'local' && !(await pingLocal())) { alert('連不上本地模型：確認 llama-server 有開、位址正確、在同一臺電腦開網站'); return; }
+  btn.disabled = true; if (msg) msg.textContent = '刷新現價並分析中…';
+  try {
+    await refreshTrackedPrices();
+    const cur = TRACK.find(v => v.ticker === t);
+    if (!cur) return;
+    await analyzeBatch([{ ticker: t, name: cur.name, price: cur.price, chgW: cur.chgW, mcap: cur.mcap, sector: cur.sector }], prov);
+    renderTrack();
+    showTrackModal(t);
+  } catch (err) {
+    if (msg) msg.textContent = '分析失敗：' + err.message;
+    btn.disabled = false;
+  }
+});
+renderTrack();
+
+// ===== 🤖 Gemini 選股 =====
+function mergePicks(a, b) {
+  const m = new Map();
+  for (const p of (a || [])) m.set(p.id, p);
+  for (const p of (b || [])) if (!m.has(p.id)) m.set(p.id, p);
+  return [...m.values()].sort((x, y) => (y.at || '').localeCompare(x.at || '')).slice(0, 12);
+}
+function pickDigest() {
+  const rows = [];
+  for (const s of L.list) {
+    const g = resOf(s.ticker, 'gemini'), l = resOf(s.ticker, 'local');
+    const r = (g && !g.err && !g.raw) ? Object.assign({ src: 'Gemini' }, g) : (l && !l.err && !l.raw) ? Object.assign({ src: '本地' }, l) : null;
+    if (!r) continue;
+    rows.push({ s: s, r: r });
+  }
+  return rows;
+}
+async function runPicks() {
+  if (!SET.geminiKey || !SET.geminiKey.trim()) { alert('先在專區設定填 Gemini API Key 並儲存'); $('S_geminiKey').focus(); return; }
+  const rows = pickDigest();
+  if (!rows.length) { alert('本週還沒有任何完成的分析，先跑「開始分析」再來選股'); return; }
+  const topN = Math.max(1, parseInt($('P_topN').value, 10) || 10);
+  const criteria = $('P_criteria').value.trim();
+  const digest = rows.map(({ s, r }) =>
+    '- ' + s.ticker + '（' + s.name + '，' + (s.sector || '未知') + '）：本週 ' + (s.chgW == null ? '?' : s.chgW.toFixed(1)) + '%，現價 $' + s.price + '，市值 ' + fmtMcap(s.mcap) +
+    '｜主因：' + (r.cause || '') + '｜分類：' + (r.category || '') + '｜不理性：' + (r.irrational || '') + '（' + (r.reason || '') + '）｜反彈機率：' + (r.reboundProb === '' || r.reboundProb == null ? '–' : r.reboundProb + '%') + '｜重點：' + (r.keyPoints || '')
+  ).join('\n');
+  const prompt = '你是選股分析師。以下是本週大跌股逐一的第一性原理分析日誌，共 ' + rows.length + ' 檔。請從中挑出最值得進一步研究與布局的前 ' + topN + ' 檔並排序。' +
+    '評選標準：跌因偏一次性或情緒面而非基本面永久受損、市場反應過度（錯殺）、反彈機率高、風險可控；同分時偏好市值較大、流動性較好的。' +
+    (criteria ? '使用者額外條件：' + criteria + '。' : '') +
+    '\n只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。每個物件欄位：{"ticker":"代號","score":0到100的整數（綜合分數）,"reason":"入選理由，一到兩句","risk":"最大風險，一句"}' +
+    '\n分析日誌：\n' + digest;
+  $('P_btnRun').disabled = true;
+  $('P_status').textContent = 'Gemini 選股中（彙整 ' + rows.length + ' 檔分析）…';
+  try {
+    let out = null, lastErr = null;
+    for (const m of models()) {
+      try { out = await geminiCallOnce(m, prompt, false); break; }
+      catch (e) { lastErr = e; if (/401|403|API key/i.test(e.message)) throw e; }
+    }
+    if (!out) throw lastErr || new Error('Gemini 呼叫失敗');
+    let txt = out.text.trim().replace(/```json/gi, '').replace(/```/g, '').trim();
+    const a = txt.indexOf('['), b = txt.lastIndexOf(']');
+    let arr = null;
+    if (a >= 0 && b > a) { try { arr = JSON.parse(txt.slice(a, b + 1)); } catch (e) { /* 解析失敗 */ } }
+    if (!Array.isArray(arr) || !arr.length) throw new Error('Gemini 回覆格式解析失敗，原文：' + out.text.slice(0, 200));
+    const byT = {};
+    rows.forEach(({ s }) => { byT[s.ticker] = s; });
+    const picks = [];
+    for (const o of arr) {
+      const s = o && byT[String(o.ticker || '').toUpperCase()];
+      if (!s) continue;
+      picks.push({ ticker: s.ticker, name: s.name, sector: s.sector || '', price: s.price, chgW: s.chgW, mcap: s.mcap, score: (parseInt(o.score, 10) || 0), reason: o.reason || '', risk: o.risk || '' });
+      if (picks.length >= topN) break;
+    }
+    if (!picks.length) throw new Error('Gemini 回的代號都不在本週清單裡，請重跑一次');
+    const entry = { id: todayStr() + 'T' + new Date().toTimeString().slice(0, 8), date: todayStr(), at: new Date().toISOString(), weekKey: L.weekKey, topN: topN, criteria: criteria, basedOn: rows.length, model: out.model, picks: picks };
+    PICKS.unshift(entry);
+    PICKS = PICKS.slice(0, 12);
+    saveJSON(PKEY, PICKS);
+    renderPicks();
+    $('P_status').textContent = '完成：從 ' + rows.length + ' 檔分析挑出 ' + picks.length + ' 檔（' + out.model + '）';
+  } catch (e) {
+    $('P_status').textContent = '選股失敗：' + e.message;
+  }
+  $('P_btnRun').disabled = false;
+}
+function renderPicks() {
+  const box = $('P_result'); if (!box) return;
+  const hist = $('P_history');
+  if (!PICKS.length) { box.innerHTML = ''; if (hist) hist.textContent = ''; return; }
+  const cur = PICKS[0];
+  let h = '<div style="font-size:13px;color:#45566a;margin-bottom:6px">最新一次：' + esc(cur.date) + '・榜單週 ' + esc(cur.weekKey || '') + '・根據 ' + cur.basedOn + ' 檔分析・模型 ' + esc(cur.model || '') + (cur.criteria ? '・條件：' + esc(cur.criteria) : '') + '</div>';
+  h += cur.picks.map((p, i) =>
+    '<div style="display:flex;gap:10px;align-items:flex-start;border-top:1px solid #eef2f6;padding:8px 0">' +
+    '<div style="font-weight:700;font-size:16px;color:#14324f;min-width:26px">#' + (i + 1) + '</div>' +
+    '<div style="flex:1"><strong>' + esc(p.ticker) + '</strong> ' + esc(p.name) + ' <span style="color:#5b6b7a;font-size:12.5px">' + esc(p.sector || '') + '・現價 $' + num(p.price) + '・本週 ' + (p.chgW == null ? '–' : p.chgW.toFixed(1) + '%') + '</span>' +
+    '<div style="font-size:13px;line-height:1.55">' + esc(p.reason) + '</div>' +
+    '<div style="font-size:12.5px;color:#b3261e">風險：' + esc(p.risk) + '</div></div>' +
+    '<div style="text-align:right"><div style="font-weight:700;color:' + probColor(p.score) + '">' + p.score + ' 分</div>' +
+    (isTracked(p.ticker) ? '<span style="font-size:12.5px;color:#137333">已追蹤 ✓</span>' : '<button class="small secondary" data-pick="' + esc(p.ticker) + '">＋追蹤</button>') + '</div></div>'
+  ).join('');
+  box.innerHTML = h;
+  if (hist) hist.innerHTML = PICKS.length > 1 ? ('歷史選股：' + PICKS.slice(1).map(p => esc(p.date) + '（' + p.picks.map(x => esc(x.ticker)).join(', ') + '）').join('；')) : '';
+}
+$('P_btnRun').addEventListener('click', runPicks);
+$('P_result').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-pick]');
+  if (!btn) return;
+  const cur = PICKS[0]; if (!cur) return;
+  const p = cur.picks.find(x => x.ticker === btn.dataset.pick);
+  if (p) { addTrack(p); renderTrack(); renderPicks(); renderL(); }
+});
+renderPicks();
