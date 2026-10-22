@@ -132,6 +132,18 @@
       <button id="L_btnStop" class="secondary" disabled>⏸ 停止</button>
       <span id="L_progress" style="font-size:13px"></span>
     </div>
+    <div class="toolbar">
+      <label style="font-size:13.5px">排序：
+        <select id="L_sort">
+          <option value="drop">本週跌幅（跌最兇在前）</option>
+          <option value="probG">反彈機率・Gemini（高→低）</option>
+          <option value="probL">反彈機率・本地（高→低）</option>
+          <option value="mcap">市值（大→小）</option>
+          <option value="price">現價（高→低）</option>
+        </select>
+      </label>
+      <span style="font-size:12.5px;color:#45566a">勾選表格左側方框，把股票加入下方「📌 追蹤專區」（跨週保留）。</span>
+    </div>
     <details class="grp" id="grpClear">
       <summary>🗑 結果管理（清空重跑）</summary>
       <div style="padding:10px 2px 2px">
@@ -143,12 +155,26 @@
     <div class="tablewrap">
       <table>
         <thead><tr>
-          <th>#</th><th>代號</th><th>公司</th><th>產業</th><th class="num">現價</th><th class="num">本週漲跌</th>
+          <th>#</th><th>追蹤</th><th>代號</th><th>公司</th><th>產業</th><th class="num">現價</th><th class="num">本週漲跌</th>
           <th class="num">市值</th><th>分析狀態</th><th>不理性？</th><th class="num">反彈機率</th><th>操作</th>
         </tr></thead>
         <tbody id="L_tbody"></tbody>
       </table>
       <div class="empty" id="L_empty">尚未載入。按「↻ 載入本週大跌榜」開始。</div>
+    </div>
+
+    <h3 style="margin:22px 0 8px;font-size:16px">🤖 Gemini 選股（把本週分析日誌交給 Gemini 挑）</h3>
+    <div class="panel" style="background:#fff;border:1px solid #dde3e9;border-radius:8px;padding:14px 16px">
+      <div class="toolbar" style="margin-bottom:8px">
+        <label style="font-size:13.5px">挑出前
+          <select id="P_topN"><option value="5">5</option><option value="10" selected>10</option><option value="20">20</option></select> 檔</label>
+        <input id="P_criteria" type="text" placeholder="額外條件（可留空）：如 偏好大型股、避開生技、只挑錯殺型" style="flex:1;min-width:220px;padding:8px 10px;border:1px solid #c6cdd4;border-radius:6px;font-size:13.5px">
+        <button id="P_btnRun">🤖 讓 Gemini 選股</button>
+        <span id="P_status" style="font-size:13px"></span>
+      </div>
+      <p style="font-size:12.5px;color:#45566a;margin:0 0 8px">把本週已完成分析的股票（主因／分類／不理性判斷／反彈機率）彙整成一份日誌交給 Gemini，請它排出最值得研究的名單。只會用到有分析結果的股票；用 Gemini 額度（不接地搜尋，約 1 次呼叫）。</p>
+      <div id="P_result"></div>
+      <div id="P_history" style="font-size:12.5px;color:#45566a;margin-top:8px"></div>
     </div>
 
     <h3 style="margin:22px 0 8px;font-size:16px">⚙️ 專區設定（只存在本機瀏覽器，不會上傳 GitHub）</h3>
@@ -211,6 +237,28 @@
     </div>
     <pre id="L_logView" style="white-space:pre-wrap;background:#fff;border:1px solid #dde3e9;border-radius:8px;max-height:320px;overflow:auto;padding:12px;font-size:12.5px;line-height:1.6">（今日尚無分析紀錄）</pre>
   </section>
+
+  <section id="trackZone" style="margin-top:36px;border-top:2px solid #dde3e9;padding-top:20px">
+    <h2 style="margin:0 0 6px;font-size:20px">📌 追蹤專區</h2>
+    <p style="font-size:13px;color:#45566a;line-height:1.6;margin:0 0 12px">
+      從大跌榜勾選加入的股票會留在這裡，跨週保留、不會被下週榜單洗掉。每檔記錄加入追蹤的日期與當時價格；
+      點「詳情」看股價圖和不同日期的 AI 分析日誌，也可以直接在這裡重新分析。追蹤清單會跟著跨裝置同步一起走。
+    </p>
+    <div class="toolbar">
+      <button class="secondary" id="T_btnRefresh">↻ 刷新現價</button>
+      <span id="T_status" style="font-size:13px;color:#45566a"></span>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>代號</th><th>公司</th><th>加入日期</th><th class="num">加入時價</th><th class="num">現價</th>
+          <th class="num">自加入漲跌</th><th class="num">本週漲跌</th><th>分析紀錄</th><th>操作</th>
+        </tr></thead>
+        <tbody id="T_tbody"></tbody>
+      </table>
+      <div class="empty" id="T_empty">尚無追蹤。到上方大跌榜勾選股票（表格左側方框）即可加入。</div>
+    </div>
+  </section>
 </main>
 <footer>
   使用方式：每研究一檔就新增一筆，基本面數字以最新一季財報（10-Q / earnings release）為準並記下日期；消息面欄位記催化劑與事件日期。
@@ -222,6 +270,6 @@
     <div id="modalContent"></div>
   </div>
 </div>
-<script src="app.js?v=18"></script>
+<script src="app.js?v=19"></script>
 </body>
 </html>
