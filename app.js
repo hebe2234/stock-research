@@ -382,12 +382,16 @@ async function callLLM(batch, provider) {
 }
 
 function newsRelevant(a, s, cleanName) {
-  // 搜尋引擎常把代號相近的公司搞混（MSM vs MSC）：標題/內文必須真的提到代號或公司名關鍵字才算相關
-  const hay = ((a.title || '') + ' ' + (a.content || '')).toUpperCase();
-  const tk = String(s.ticker || '').toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (tk && new RegExp('(^|[^A-Z])' + tk + '([^A-Z]|$)').test(hay)) return true;
+  // 搜尋引擎常把代號相近的公司搞混（MSM vs MSC）：代號須以獨立字出現在標題/內文，或公司名關鍵字出現在標題，才算相關。
+  // 用字界比對（industrials 不算 industrial）且只看標題關鍵字，避免長文裡的普通單字誤判。
+  const title = (a.title || '').toUpperCase();
+  const hay = title + ' ' + (a.content || '').toUpperCase();
+  const esc = x => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const inText = (txt, w) => new RegExp('(^|[^A-Z])' + esc(w) + '([^A-Z]|$)').test(txt);
+  const tk = String(s.ticker || '').toUpperCase();
+  if (tk && inText(hay, tk)) return true;
   const toks = String(cleanName || '').split(/\s+/).filter(w => w.length >= 4).map(w => w.toUpperCase());
-  return toks.some(t => hay.includes(t));
+  return toks.some(t => inText(title, t));
 }
 
 async function fetchWebNews(s) {
@@ -396,7 +400,8 @@ async function fetchWebNews(s) {
       const name = (s.name || s.ticker).replace(/\b(Inc|Corp|Corporation|Ltd|Limited|PLC|SA|NV|AG|Co|Company|Holdings|Group)\b\.?/gi, '').trim();
       const ctl = new AbortController();
       const to = setTimeout(() => ctl.abort(), 12000);
-      const r = await fetch('https://api.tavily.com/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl.signal, body: JSON.stringify({ api_key: SET.tavilyKey.trim(), query: name + ' ' + s.ticker + ' stock news', topic: 'news', days: 14, max_results: 10, search_depth: 'basic' }) });
+      const q = name.includes(' ') ? '"' + name + '" ' + s.ticker + ' stock news' : name + ' ' + s.ticker + ' stock news';
+      const r = await fetch('https://api.tavily.com/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl.signal, body: JSON.stringify({ api_key: SET.tavilyKey.trim(), query: q, topic: 'news', days: 14, max_results: 10, search_depth: 'basic' }) });
       clearTimeout(to);
       if (r.ok) {
         const j = await r.json();
@@ -736,7 +741,7 @@ $('S_btnTestSync').addEventListener('click', async () => {
     else el.textContent = '❌ 連線失敗（' + r.status + '）';
   } catch (e) { el.textContent = '❌ 連線失敗：' + e.message; }
 });
-$('L_ver').textContent = 'v3.4';
+$('L_ver').textContent = 'v3.5';
 renderL();
 updateLogView();
 syncNow(false);
