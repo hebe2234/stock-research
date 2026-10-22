@@ -381,18 +381,28 @@ async function callLLM(batch, provider) {
   return geminiCall(buildBatchPrompt(batch));
 }
 
+function newsRelevant(a, s, cleanName) {
+  // 搜尋引擎常把代號相近的公司搞混（MSM vs MSC）：標題/內文必須真的提到代號或公司名關鍵字才算相關
+  const hay = ((a.title || '') + ' ' + (a.content || '')).toUpperCase();
+  const tk = String(s.ticker || '').toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (tk && new RegExp('(^|[^A-Z])' + tk + '([^A-Z]|$)').test(hay)) return true;
+  const toks = String(cleanName || '').split(/\s+/).filter(w => w.length >= 4).map(w => w.toUpperCase());
+  return toks.some(t => hay.includes(t));
+}
+
 async function fetchWebNews(s) {
   if (SET.tavilyKey && SET.tavilyKey.trim()) {
     try {
       const name = (s.name || s.ticker).replace(/\b(Inc|Corp|Corporation|Ltd|Limited|PLC|SA|NV|AG|Co|Company|Holdings|Group)\b\.?/gi, '').trim();
       const ctl = new AbortController();
       const to = setTimeout(() => ctl.abort(), 12000);
-      const r = await fetch('https://api.tavily.com/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl.signal, body: JSON.stringify({ api_key: SET.tavilyKey.trim(), query: name + ' stock news', topic: 'news', days: 14, max_results: 6, search_depth: 'basic' }) });
+      const r = await fetch('https://api.tavily.com/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl.signal, body: JSON.stringify({ api_key: SET.tavilyKey.trim(), query: name + ' ' + s.ticker + ' stock news', topic: 'news', days: 14, max_results: 6, search_depth: 'basic' }) });
       clearTimeout(to);
       if (r.ok) {
         const j = await r.json();
         const out = [];
         for (const a of (j.results || [])) {
+          if (!newsRelevant(a, s, name)) continue;
           const t = (a.title || '').trim();
           if (!t) continue;
           let host = '';
