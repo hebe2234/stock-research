@@ -738,3 +738,11 @@ $('L_btnClearL').addEventListener('click', () => clearProvider('local', '本地�
 migrateResults();
 renderL();
 updateLogView();
+
+// 摺疊群組開合狀態記憶（工具列/設定分類）
+document.querySelectorAll('details.grp').forEach(d => {
+  if (!d.id) return;
+  const k = 'stockResearch.grp.' + d.id;
+  try { const v = localStorage.getItem(k); if (v === '1') d.open = true; else if (v === '0') d.open = false; } catch (e) {}
+  d.addEventListener('toggle', () => { try { localStorage.setItem(k, d.open ? '1' : '0'); } catch (e) {} });
+});
