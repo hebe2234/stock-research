@@ -120,7 +120,7 @@
     <h2 style="margin:0 0 6px;font-size:20px">📉 本週大跌股專區 — 第一性原理 × Gemini</h2>
     <p style="font-size:13px;color:#45566a;line-height:1.6;margin:0 0 12px">
       每週抓下跌最多的前 100 檔（NASDAQ / NYSE / AMEX、股價 ≥ $5、市值 ≥ $300M，先擋掉仙股洗版）。
-      按「開始分析」後，AI（Gemini 或本地 llama.cpp，在下方設定切換）才會逐一分析：下跌主因、是否市場不理性、反彈機率，每跑完一檔就自動記錄進你指定的 Google Doc（需先完成下方一次性設定）。
+      按「開始分析」後，AI（Gemini 或本地 llama.cpp，在下方設定切換）才會逐一分析：下跌主因、是否市場不理性、反彈機率。分析結果會自動同步到你的私人 GitHub repo（在下方「跨裝置同步」貼一次 token），手機和另一台電腦打開就是同一份資料。
       中途可停止，隔天按了會接著分析還沒跑的。
     </p>
     <div class="toolbar">
@@ -186,12 +186,14 @@
           <div><label>Tavily API Key（直接搜尋用，免費申請，貼這裡就好，不要貼到聊天室）</label><input id="S_tavilyKey" type="password" autocomplete="off" placeholder="tvly-…"></div>
         </div>
       </details>
-      <details class="grp" id="grpDoc">
-        <summary>☁️ Google Doc 同步</summary>
+      <details class="grp" id="grpSync">
+        <summary>☁️ 跨裝置同步（GitHub）</summary>
         <div class="grid">
-          <div class="wide"><label>Google Doc 同步網址（Apps Script 部署網址，結尾 /exec；第一次設定看表單下方 📖 步驟。沒設定就先空著，紀錄會存本機並可下載）</label><input id="S_docUrl" placeholder="https://script.google.com/macros/s/…/exec"></div>
-          <div><label>Doc 連線測試</label><button type="button" class="secondary" id="S_btnTestDoc">測試 Google Doc 連線</button> <span id="S_docStatus" style="font-size:12.5px"></span></div>
+          <div class="wide"><label>GitHub 同步 Token（fine-grained PAT，只給 stock-research-data 這個 repo 的 Contents 讀寫；貼這裡就好，不要貼到聊天室）</label><input id="S_syncToken" type="password" autocomplete="off" placeholder="github_pat_…"></div>
+          <div><label>同步 repo 名稱</label><input id="S_syncRepo" value="stock-research-data"></div>
+          <div><label>連線測試</label><button type="button" class="secondary" id="S_btnTestSync">測試同步連線</button> <span id="S_syncStatus" style="font-size:12.5px"></span></div>
         </div>
+        <p style="font-size:12.5px;color:#45566a;margin:8px 0 0">watchlist、大跌榜與分析結果會自動同步到你的私人 repo（data.json）；手機和另一台電腦貼同一支 token 就是同一份資料。Gemini / Tavily 等 key 不會同步，只留在各裝置本機。</p>
       </details>
       <div class="formactions">
         <button type="submit">儲存設定</button>
@@ -199,56 +201,9 @@
       </div>
     </form>
 
-    <details style="background:#fff;border:1px solid #dde3e9;border-radius:8px;padding:12px 16px;margin-top:12px">
-      <summary style="cursor:pointer;font-weight:600">📖 Google Doc 同步設定（一次性，約 5 分鐘）</summary>
-      <ol style="font-size:13.5px;line-height:1.7;margin:10px 0 6px;padding-left:22px">
-        <li>到 <strong>Google Docs</strong> 新增一份空白文件（名字隨意，例如「個股分析日誌」）。這份文件不用改任何分享設定。</li>
-        <li>在這份文件裡點選單「<strong>擴充功能 → Apps Script</strong>」，把編輯器裡的預設程式碼全選刪掉，貼上下方整段腳本，按儲存（💾）。</li>
-        <li>右上「<strong>部署 → 新增部署作業</strong>」→ 類型選「<strong>網頁應用程式</strong>」→ 執行身分選「<strong>我</strong>」、存取權選「<strong>任何人</strong>」→ 部署。第一次會跳 Google 授權（讓腳本能寫這份文件），照著點允許。</li>
-        <li>複製部署完成的<strong>網頁應用程式網址</strong>（結尾是 <code>/exec</code>），貼回上方設定「Google Doc 同步網址」，按「儲存設定」。</li>
-        <li>按「<strong>測試 Google Doc 連線</strong>」，回到文件確認出現「✅ 連線測試」一行，就完成了。之後每跑完一檔分析，這裡就會自動多一筆。</li>
-      </ol>
-      <p style="font-size:12.5px;color:#45566a;margin:6px 0">注意：那串網址等於這份文件的寫入鑰匙，只存在你本機瀏覽器，不要外流。日後若修改腳本，要到「部署 → 管理部署作業 → 編輯 → 版本選新版本」才會生效（網址不變）。</p>
-      <button type="button" class="secondary" id="btnCopyGas">複製 Apps Script 腳本</button>
-      <pre id="gasCode" style="white-space:pre-wrap;background:#f4f6f8;border:1px solid #dde3e9;border-radius:8px;padding:12px;font-size:12px;line-height:1.55;max-height:300px;overflow:auto">function doPost(e) {
-  try {
-    var d = JSON.parse(e.postData.contents);
-    var body = DocumentApp.getActiveDocument().getBody();
-    if (d.test) {
-      body.appendParagraph('✅ 連線測試（' + d.time + '）— Stock Research 研究台已接上這份文件');
-      body.appendHorizontalRule();
-      return ok_();
-    }
-    var chg = (d.chgW === null || d.chgW === undefined || d.chgW === '') ? '?' : Number(d.chgW).toFixed(1);
-    var head = body.appendParagraph('【' + d.date + ' ' + d.time + '】' + d.ticker + ' ' + (d.name || '') +
-      '（本週 ' + chg + '%）— ' + (d.provider === 'local' ? '本地模型' : 'Gemini') + '（' + (d.model || '') + '）');
-    head.setHeading(DocumentApp.ParagraphHeading.HEADING2);
-    if (d.raw) {
-      body.appendParagraph('原始回覆（解析失敗，原文保留）：');
-      body.appendParagraph(d.raw);
-    } else {
-      body.appendParagraph('下跌主因：' + (d.cause || ''));
-      body.appendParagraph('分類：' + (d.category || ''));
-      body.appendParagraph('市場不理性：' + (d.irrational || '') + ' — ' + (d.reason || ''));
-      var prob = (d.reboundProb === '' || d.reboundProb === null || d.reboundProb === undefined) ? '–' : d.reboundProb + '%';
-      body.appendParagraph('反彈機率（1–3 個月漲回跌前價位）：' + prob);
-      body.appendParagraph('觀察重點：' + (d.keyPoints || ''));
-    }
-    body.appendHorizontalRule();
-  } catch (err) {}
-  return ok_();
-}
-function ok_() {
-  return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
-}
-function doGet() {
-  return ContentService.createTextOutput('Stock Research Doc Sync OK');
-}</pre>
-    </details>
-
     <h3 style="margin:22px 0 8px;font-size:16px">📓 今日分析日誌</h3>
     <div class="toolbar">
-      <button class="secondary" id="L_btnSync">補送未同步紀錄到 Google Doc</button>
+      <button class="secondary" id="L_btnSyncNow">☁️ 立即同步</button>
       <button class="secondary" id="L_btnDownloadLog">下載今日日誌 .md</button>
       <span id="L_docStatus" style="font-size:13px;color:#45566a"></span>
     </div>
@@ -265,6 +220,6 @@ function doGet() {
     <div id="modalContent"></div>
   </div>
 </div>
-<script src="app.js?v=12"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>
