@@ -147,7 +147,9 @@ SET.provider = SET.provider || 'gemini';
 SET.localEndpoint = SET.localEndpoint || 'http://localhost:8080';
 SET.localModel = SET.localModel || 'qwen3-coder-30b-a3b-instruct-q4_k_m.gguf';
 SET.localApiKey = SET.localApiKey || '';
-SET.localNews = SET.localNews || '1';
+SET.localNews = SET.localNews || 'web';
+if (SET.localNews === '1' || SET.localNews === 'gemini') SET.localNews = 'web';
+SET.tavilyKey = SET.tavilyKey || '';
 SET.docUrl = SET.docUrl || '';
 let DOCQ = loadJSON(QKEY, []);
 let LexpandedId = null;
@@ -238,14 +240,14 @@ function buildBatchPrompt(batch, newsMap) {
   const lines = batch.map(s => {
     let line = '- ' + s.ticker + '（' + s.name + '，產業：' + (s.sector || '未知') + '）：本週漲跌 ' + (s.chgW == null ? '?' : s.chgW.toFixed(1)) + '%，現價 $' + s.price + '，市值約 ' + fmtMcap(s.mcap);
     const nw = newsMap && newsMap[s.ticker];
-    if (nw) line += '\n  近兩週新聞標題：' + nw;
+    if (nw) line += '\n  近期查證資訊：' + nw;
     return line;
   }).join('\n');
   const nowD = new Date();
   const today = nowD.getFullYear() + ' 年 ' + (nowD.getMonth() + 1) + ' 月 ' + nowD.getDate() + ' 日';
   return '今天是 ' + today + '。你是股票分析師，用第一性原理逐一分析以下美股本週（最近 7 天）大跌的原因。清單：\n' + lines +
     '\n【日期規則】新聞標題後括號內是該新聞的發布日期；dropCause 裡註明的消息日期必須照抄新聞的日期，或只寫相對時間（例如「本週」），嚴禁自行推測年份，絕對不要寫成過去的年份。' +
-    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）。【新聞規則】有附新聞標題的，必須以新聞為主要依據，不得忽略新聞另編原因；沒有附新聞標題的，dropCause 開頭必須寫「（無即時新聞可查）」，只能依股價表現做保守推測，嚴禁編造具體事件、數字或日期。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
+    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）。【資訊規則】有附查證資訊的，必須以其為主要依據，不得忽略另編原因；沒有附查證資訊的，dropCause 開頭必須寫「（無即時新聞可查）」，只能依股價表現做保守推測，嚴禁編造具體事件、數字或日期。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
     '{"ticker":"代號","dropCause":"下跌主因，一段話，註明消息日期","category":"基本面惡化|消息面一次性衝擊|市場情緒/資金面|產業系統性|不明",' +
     '"irrational":"是|否|部分","irrationalReason":"為什麼這樣判斷，公司核心基本面是否實質受損","reboundProb":0到100的整數（未來1到3個月漲回本週下跌前價位的機率）,' +
     '"keyPoints":"投資人該觀察的2到3個驗證點"}';
@@ -354,7 +356,10 @@ async function localCall(prompt) {
 async function callLLM(batch, provider) {
   if (provider === 'local') {
     let newsMap = null;
-    if (SET.localNews !== '0') {
+    if (SET.localNews === 'web') {
+      newsMap = {};
+      for (const s of batch) newsMap[s.ticker] = await fetchWebNews(s);
+    } else if (SET.localNews === 'gdelt') {
       newsMap = {};
       for (const s of batch) newsMap[s.ticker] = await fetchNews(s);
     }
@@ -363,6 +368,34 @@ async function callLLM(batch, provider) {
     return out;
   }
   return geminiCall(buildBatchPrompt(batch));
+}
+
+async function fetchWebNews(s) {
+  if (SET.tavilyKey && SET.tavilyKey.trim()) {
+    try {
+      const name = (s.name || s.ticker).replace(/\b(Inc|Corp|Corporation|Ltd|Limited|PLC|SA|NV|AG|Co|Company|Holdings|Group)\b\.?/gi, '').trim();
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 12000);
+      const r = await fetch('https://api.tavily.com/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl.signal, body: JSON.stringify({ api_key: SET.tavilyKey.trim(), query: name + ' stock news', topic: 'news', days: 14, max_results: 6, search_depth: 'basic' }) });
+      clearTimeout(to);
+      if (r.ok) {
+        const j = await r.json();
+        const out = [];
+        for (const a of (j.results || [])) {
+          const t = (a.title || '').trim();
+          if (!t) continue;
+          let host = '';
+          try { host = new URL(a.url).hostname.replace(/^www\./, ''); } catch (e) { /* 無法解析網址就留空 */ }
+          const d = (a.published_date || '').slice(0, 10);
+          const snip = (a.content || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+          out.push(t + '（' + host + (d ? '，' + d : '') + '）' + (snip ? '：' + snip : ''));
+          if (out.length >= 5) break;
+        }
+        if (out.length) return '【網路搜尋】' + out.join('；');
+      }
+    } catch (e) { /* 搜尋失敗就退回 GDELT */ }
+  }
+  return fetchNews(s);
 }
 
 function parseBatch(text) {
@@ -540,6 +573,7 @@ $('S_form').addEventListener('submit', (e) => {
   SET.localEndpoint = $('S_localEndpoint').value;
   SET.localModel = $('S_localModel').value;
   SET.localApiKey = $('S_localApiKey').value;
+  SET.tavilyKey = $('S_tavilyKey').value;
   SET.localNews = $('S_localNews').value;
   SET.geminiKey = $('S_geminiKey').value;
   SET.model = $('S_model').value || 'gemini-2.5-flash,gemini-2.5-flash-lite';
@@ -566,7 +600,8 @@ $('S_provider').value = SET.provider || 'gemini';
 $('S_localEndpoint').value = SET.localEndpoint || 'http://localhost:8080';
 $('S_localModel').value = SET.localModel || 'qwen3-coder-30b-a3b-instruct-q4_k_m.gguf';
 $('S_localApiKey').value = SET.localApiKey || '';
-$('S_localNews').value = SET.localNews || '1';
+$('S_tavilyKey').value = SET.tavilyKey || '';
+$('S_localNews').value = SET.localNews || 'web';
 $('S_btnTestLocal').addEventListener('click', async () => {
   const ep = $('S_localEndpoint').value.replace(/\/+$/, '');
   $('S_localStatus').textContent = '測試中…';
