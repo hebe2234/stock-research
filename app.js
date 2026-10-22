@@ -736,7 +736,7 @@ $('S_btnTestSync').addEventListener('click', async () => {
     else el.textContent = '❌ 連線失敗（' + r.status + '）';
   } catch (e) { el.textContent = '❌ 連線失敗：' + e.message; }
 });
-$('L_ver').textContent = 'v3.3';
+$('L_ver').textContent = 'v3.4';
 renderL();
 updateLogView();
 syncNow(false);
