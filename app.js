@@ -238,14 +238,14 @@ function buildBatchPrompt(batch, newsMap) {
   const lines = batch.map(s => {
     let line = '- ' + s.ticker + '（' + s.name + '，產業：' + (s.sector || '未知') + '）：本週漲跌 ' + (s.chgW == null ? '?' : s.chgW.toFixed(1)) + '%，現價 $' + s.price + '，市值約 ' + fmtMcap(s.mcap);
     const nw = newsMap && newsMap[s.ticker];
-    if (nw) line += '\n  近期新聞標題：' + nw;
+    if (nw) line += '\n  近兩週新聞標題：' + nw;
     return line;
   }).join('\n');
   const nowD = new Date();
   const today = nowD.getFullYear() + ' 年 ' + (nowD.getMonth() + 1) + ' 月 ' + nowD.getDate() + ' 日';
   return '今天是 ' + today + '。你是股票分析師，用第一性原理逐一分析以下美股本週（最近 7 天）大跌的原因。清單：\n' + lines +
     '\n【日期規則】新聞標題後括號內是該新聞的發布日期；dropCause 裡註明的消息日期必須照抄新聞的日期，或只寫相對時間（例如「本週」），嚴禁自行推測年份，絕對不要寫成過去的年份。' +
-    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）；若附了近期新聞標題可作線索，沒有即時資訊時就在 dropCause 註明資訊有限。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
+    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）。【新聞規則】有附新聞標題的，必須以新聞為主要依據，不得忽略新聞另編原因；沒有附新聞標題的，dropCause 開頭必須寫「（無即時新聞可查）」，只能依股價表現做保守推測，嚴禁編造具體事件、數字或日期。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
     '{"ticker":"代號","dropCause":"下跌主因，一段話，註明消息日期","category":"基本面惡化|消息面一次性衝擊|市場情緒/資金面|產業系統性|不明",' +
     '"irrational":"是|否|部分","irrationalReason":"為什麼這樣判斷，公司核心基本面是否實質受損","reboundProb":0到100的整數（未來1到3個月漲回本週下跌前價位的機率）,' +
     '"keyPoints":"投資人該觀察的2到3個驗證點"}';
@@ -282,17 +282,45 @@ async function geminiCall(prompt) {
 }
 
 async function fetchNews(s) {
-  try {
-    const name = (s.name || s.ticker).replace(/\b(Inc|Corp|Corporation|Ltd|Limited|PLC|SA|NV|AG|Co|Company|Holdings|Group)\b\.?/gi, '').trim();
-    const q = encodeURIComponent('"' + name + '" stock');
-    const ctl = new AbortController();
-    const to = setTimeout(() => ctl.abort(), 8000);
-    const r = await fetch('https://api.gdeltproject.org/api/v2/doc/doc?query=' + q + '&mode=artlist&maxrecords=5&timespan=1week&sort=datedesc&format=json', { signal: ctl.signal });
-    clearTimeout(to);
-    if (!r.ok) return '';
-    const j = await r.json();
-    return (j.articles || []).slice(0, 5).map(a => { const d = (a.seendate || '').slice(0, 8); const ds = d.length === 8 ? d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) : d; return (a.title || '') + '（' + (a.domain || '') + '，' + ds + '）'; }).join('；');
-  } catch (e) { return ''; }
+  const name = (s.name || s.ticker).replace(/\b(Inc|Corp|Corporation|Ltd|Limited|PLC|SA|NV|AG|Co|Company|Holdings|Group)\b\.?/gi, '').trim();
+  const fmt = (d) => d.getFullYear().toString() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0') + String(d.getHours()).padStart(2, '0') + String(d.getMinutes()).padStart(2, '0') + String(d.getSeconds()).padStart(2, '0');
+  const now = new Date();
+  const from = new Date(now.getTime() - 14 * 24 * 3600 * 1000);
+  const win = '&mode=artlist&format=json&startdatetime=' + fmt(from) + '&enddatetime=' + fmt(now);
+  async function gdelt(query, maxrecords, sort) {
+    const url = 'https://api.gdeltproject.org/api/v2/doc/doc?query=' + encodeURIComponent(query) + '&maxrecords=' + maxrecords + '&sort=' + sort + win;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const ctl = new AbortController();
+        const to = setTimeout(() => ctl.abort(), 8000);
+        const r = await fetch(url, { signal: ctl.signal });
+        clearTimeout(to);
+        if (r.ok) { const j = await r.json(); return j.articles || []; }
+      } catch (e) { /* 失敗就重試一次 */ }
+      if (attempt === 0) await sleep(6000);
+    }
+    return null;
+  }
+  function collect(arts, seen, out, cap) {
+    for (const a of arts) {
+      const t = (a.title || '').trim();
+      if (!t || seen[t]) continue;
+      seen[t] = 1;
+      const d = (a.seendate || '').slice(0, 8);
+      const ds = d.length === 8 ? d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) : d;
+      out.push(t + '（' + (a.domain || '') + '，' + ds + '）');
+      if (out.length >= cap) break;
+    }
+  }
+  const seen = {}, out = [];
+  const a1 = await gdelt('"' + name + '"', 25, 'hybridrel');
+  if (a1) collect(a1, seen, out, 6);
+  if (out.length < 2) {
+    await sleep(6000);
+    const a2 = await gdelt(name, 10, 'datedesc');
+    if (a2) collect(a2, seen, out, 6);
+  }
+  return out.join('；');
 }
 
 async function pingLocal() {
@@ -330,7 +358,9 @@ async function callLLM(batch, provider) {
       newsMap = {};
       for (const s of batch) newsMap[s.ticker] = await fetchNews(s);
     }
-    return localCall(buildBatchPrompt(batch, newsMap));
+    const out = await localCall(buildBatchPrompt(batch, newsMap));
+    out.newsMap = newsMap;
+    return out;
   }
   return geminiCall(buildBatchPrompt(batch));
 }
@@ -365,6 +395,7 @@ async function analyzeBatch(batch, provider) {
   for (const s of batch) {
     const f = map[String(s.ticker).toUpperCase()];
     const res = f ? Object.assign({ at: at, model: out.model }, f) : { at: at, model: out.model, raw: out.text };
+    if (provider === 'local') res.news = (out.newsMap && out.newsMap[s.ticker]) || '';
     const slot = L.results[s.ticker] || (L.results[s.ticker] = {});
     slot[provider] = res;
     ARCH = ARCH.filter(a => !(a.date === todayStr() && a.ticker === s.ticker && (a.provider || provOfRes(a.res)) === provider));
@@ -591,13 +622,20 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideModal(
 
 function analysisInner(res) {
   if (!res) return '<div>尚無分析</div>';
-  if (res.err) return '<div><strong>分析失敗：</strong>' + esc(res.err) + '</div>';
-  if (res.raw) return '<div>原始回覆（解析失敗，原文保留）：</div><div>' + esc(res.raw).replace(/\n/g, '<br>') + '</div>';
+  let newsHtml = '';
+  if (res.news !== undefined) {
+    newsHtml = res.news
+      ? '<div style="color:#5b6b7a;font-size:12.5px"><strong>本次餵入新聞：</strong>' + esc(res.news) + '</div>'
+      : '<div style="color:#b3261e;font-size:12.5px"><strong>⚠️ 本次未抓到新聞，內容為模型依訓練資料推測，可信度低</strong></div>';
+  }
+  if (res.err) return '<div><strong>分析失敗：</strong>' + esc(res.err) + '</div>' + newsHtml;
+  if (res.raw) return '<div>原始回覆（解析失敗，原文保留）：</div><div>' + esc(res.raw).replace(/\n/g, '<br>') + '</div>' + newsHtml;
   return '<div><strong>下跌主因：</strong>' + esc(res.cause || '') + '</div>' +
     '<div><strong>分類：</strong>' + esc(res.category || '') + '</div>' +
     '<div><strong>市場不理性：</strong>' + esc(res.irrational || '') + ' — ' + esc(res.reason || '') + '</div>' +
     '<div><strong>反彈機率：</strong>' + esc(res.reboundProb) + '%</div>' +
     '<div><strong>觀察重點：</strong>' + esc(res.keyPoints || '') + '</div>' +
+    newsHtml +
     '<div style="color:#5b6b7a;font-size:12.5px">' + esc((res.at || '').slice(0, 16).replace('T', ' ')) + ' / ' + esc(res.model || '') + '</div>';
 }
 
