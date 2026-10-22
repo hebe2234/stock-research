@@ -396,7 +396,7 @@ async function fetchWebNews(s) {
       const name = (s.name || s.ticker).replace(/\b(Inc|Corp|Corporation|Ltd|Limited|PLC|SA|NV|AG|Co|Company|Holdings|Group)\b\.?/gi, '').trim();
       const ctl = new AbortController();
       const to = setTimeout(() => ctl.abort(), 12000);
-      const r = await fetch('https://api.tavily.com/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl.signal, body: JSON.stringify({ api_key: SET.tavilyKey.trim(), query: name + ' ' + s.ticker + ' stock news', topic: 'news', days: 14, max_results: 6, search_depth: 'basic' }) });
+      const r = await fetch('https://api.tavily.com/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl.signal, body: JSON.stringify({ api_key: SET.tavilyKey.trim(), query: name + ' ' + s.ticker + ' stock news', topic: 'news', days: 14, max_results: 10, search_depth: 'basic' }) });
       clearTimeout(to);
       if (r.ok) {
         const j = await r.json();
@@ -736,6 +736,7 @@ $('S_btnTestSync').addEventListener('click', async () => {
     else el.textContent = '❌ 連線失敗（' + r.status + '）';
   } catch (e) { el.textContent = '❌ 連線失敗：' + e.message; }
 });
+$('L_ver').textContent = 'v3.2';
 renderL();
 updateLogView();
 syncNow(false);
