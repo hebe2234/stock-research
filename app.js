@@ -11,7 +11,7 @@ function load() {
   try { return JSON.parse(localStorage.getItem(KEY)) || []; }
   catch (e) { return []; }
 }
-function save() { localStorage.setItem(KEY, JSON.stringify(stocks)); }
+function save() { localStorage.setItem(KEY, JSON.stringify(stocks)); if (!syncApplying) markDataChanged(); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function num(v, suffix) {
   if (v === '' || v === null || v === undefined || isNaN(v)) return '–';
@@ -139,10 +139,9 @@ render();
 const LKEY = 'stockResearch.losers.v1';
 const AKEY = 'stockResearch.archive.v1';
 const SKEY = 'stockResearch.settings';
-const QKEY = 'stockResearch.docqueue';
 let L = loadJSON(LKEY, { weekKey: '', fetchedAt: '', list: [], results: {} });
 let ARCH = loadJSON(AKEY, []);
-let SET = loadJSON(SKEY, { geminiKey: '', model: 'gemini-2.5-flash', grounding: '1', docUrl: '' });
+let SET = loadJSON(SKEY, { geminiKey: '', model: 'gemini-2.5-flash', grounding: '1' });
 SET.provider = SET.provider || 'gemini';
 SET.localEndpoint = SET.localEndpoint || 'http://localhost:8080';
 SET.localModel = SET.localModel || 'qwen3-coder-30b-a3b-instruct-q4_k_m.gguf';
@@ -150,14 +149,24 @@ SET.localApiKey = SET.localApiKey || '';
 SET.localNews = SET.localNews || 'web';
 if (SET.localNews === '1' || SET.localNews === 'gemini') SET.localNews = 'web';
 SET.tavilyKey = SET.tavilyKey || '';
-SET.docUrl = SET.docUrl || '';
-let DOCQ = loadJSON(QKEY, []);
+SET.syncToken = SET.syncToken || '';
+SET.syncRepo = SET.syncRepo || 'stock-research-data';
 let LexpandedId = null;
 let running = false, stopFlag = false;
-let docFlushing = false;
+const SYNC_META_KEY = 'stockResearch.syncmeta';
+let syncMeta = loadJSON(SYNC_META_KEY, { updatedAt: '', dirty: false });
+let syncApplying = false;
+function markDataChanged() {
+  try {
+    syncMeta.updatedAt = new Date().toISOString();
+    syncMeta.dirty = true;
+    localStorage.setItem(SYNC_META_KEY, JSON.stringify(syncMeta));
+  } catch (e) {}
+  scheduleSync();
+}
 
 function loadJSON(k, dft) { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? dft : v; } catch (e) { return dft; } }
-function saveJSON(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
+function saveJSON(k, v) { localStorage.setItem(k, JSON.stringify(v)); if ((k === LKEY || k === AKEY) && !syncApplying) markDataChanged(); }
 function pad2(n) { return String(n).padStart(2, '0'); }
 function dateStr(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
 function todayStr() { return dateStr(new Date()); }
@@ -166,6 +175,8 @@ function fmtMcap(v) { if (!v) return '–'; return v >= 1e9 ? '$' + (v / 1e9).to
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function resOf(t, prov) { const r = L.results[t]; return r ? (r[prov] || null) : null; }
 function provOfRes(res) { return (res && res.model && String(res.model).indexOf('local:') === 0) ? 'local' : 'gemini'; }
+function probColor(p) { const n = Math.max(0, Math.min(100, Number(p) || 0)); return 'hsl(' + Math.round(n * 1.2) + ', 72%, 36%)'; }
+const FLAG_RE = /私人公司|未上市|尚未上市|沒有公開上市|未公開上市|不存在的公司|無法識別公司|private company|not (publicly )?(listed|traded)/i;
 function doneCount(prov) { return L.list.filter(s => { const r = resOf(s.ticker, prov); return r && !r.err; }).length; }
 
 async function fetchLosers() {
@@ -218,7 +229,7 @@ function renderL() {
     const status = 'G ' + st(g) + ' / 本 ' + st(l);
     const irrPart = (tag, r) => (r && !r.err && r.irrational) ? tag + ' ' + esc(r.irrational) : '';
     const irr = [irrPart('G', g), irrPart('本', l)].filter(Boolean).join('・') || '–';
-    const probPart = (tag, r) => (r && !r.err && r.reboundProb !== '' && r.reboundProb != null) ? tag + ' ' + r.reboundProb + '%' : '';
+    const probPart = (tag, r) => (r && !r.err && r.reboundProb !== '' && r.reboundProb != null) ? tag + ' <span style="color:' + probColor(r.reboundProb) + ';font-weight:700">' + r.reboundProb + '%</span>' : '';
     const prob = [probPart('G', g), probPart('本', l)].filter(Boolean).join('・') || '–';
     let row = '<tr><td>' + (i + 1) + '</td><td><strong>' + esc(s.ticker) + '</strong></td><td class="ellipsis" title="' + esc(s.name) + '">' + esc(s.name) + '</td><td>' + esc(s.sector) + '</td>' +
       '<td class="num">' + num(s.price) + '</td><td class="num" style="color:#b3261e">' + (s.chgW == null ? '–' : s.chgW.toFixed(1) + '%') + '</td>' +
@@ -247,7 +258,7 @@ function buildBatchPrompt(batch, newsMap) {
   const today = nowD.getFullYear() + ' 年 ' + (nowD.getMonth() + 1) + ' 月 ' + nowD.getDate() + ' 日';
   return '今天是 ' + today + '。你是股票分析師，用第一性原理逐一分析以下美股本週（最近 7 天）大跌的原因。清單：\n' + lines +
     '\n【日期規則】新聞標題後括號內是該新聞的發布日期；dropCause 裡註明的消息日期必須照抄新聞的日期，或只寫相對時間（例如「本週」），嚴禁自行推測年份，絕對不要寫成過去的年份。' +
-    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）。【資訊規則】有附查證資訊的，必須以其為主要依據，不得忽略另編原因；沒有附查證資訊的，dropCause 開頭必須寫「（無即時新聞可查）」，只能依股價表現做保守推測，嚴禁編造具體事件、數字或日期。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
+    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）。【資訊規則】有附查證資訊的，必須以其為主要依據，不得忽略另編原因；沒有附查證資訊的，dropCause 開頭必須寫「（無即時新聞可查）」，只能依股價表現做保守推測，嚴禁編造具體事件、數字或日期。【查證規則】每檔先用搜尋查證該代號目前的上市狀態（注意近期 IPO、更名、併購、下市）；清單裡的股價、市值、漲跌幅都是真實市場數據，若第一時間查不到公司，換關鍵字（代號＋IPO、代號＋Nasdaq、公司名＋stock）再查，不可用「私人公司／未上市／不存在」當結論，除非搜尋證據明確支持。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
     '{"ticker":"代號","dropCause":"下跌主因，一段話，註明消息日期","category":"基本面惡化|消息面一次性衝擊|市場情緒/資金面|產業系統性|不明",' +
     '"irrational":"是|否|部分","irrationalReason":"為什麼這樣判斷，公司核心基本面是否實質受損","reboundProb":0到100的整數（未來1到3個月漲回本週下跌前價位的機率）,' +
     '"keyPoints":"投資人該觀察的2到3個驗證點"}';
@@ -427,18 +438,24 @@ async function analyzeBatch(batch, provider) {
   const at = new Date().toISOString();
   for (const s of batch) {
     const f = map[String(s.ticker).toUpperCase()];
-    const res = f ? Object.assign({ at: at, model: out.model }, f) : { at: at, model: out.model, raw: out.text };
+    let res = f ? Object.assign({ at: at, model: out.model }, f) : { at: at, model: out.model, raw: out.text };
+    if (provider === 'gemini' && f && FLAG_RE.test((f.cause || '') + '|' + (f.category || '') + '|' + (f.reason || ''))) {
+      try {
+        const p2 = '【特別查證】代號 ' + s.ticker + '（' + s.name + '）在 TradingView 掃描器上有即時交易數據：現價 $' + s.price + '、市值約 ' + fmtMcap(s.mcap) + '、本週 ' + (s.chgW == null ? '?' : s.chgW.toFixed(1)) + '%。它確實在交易所交易。請先用搜尋查證它的上市狀態（何時 IPO 或更名）與本週下跌的實際新聞，再依下列規格分析。\n' + buildBatchPrompt([s]);
+        const out2 = await geminiCall(p2);
+        const f2 = parseBatch(out2.text)[String(s.ticker).toUpperCase()];
+        if (f2 && !FLAG_RE.test((f2.cause || '') + '|' + (f2.category || '') + '|' + (f2.reason || ''))) res = Object.assign({ at: at, model: out2.model + '（查證重跑）' }, f2);
+      } catch (e) { /* 查證重跑失敗就保留原結果 */ }
+    }
     if (provider === 'local') res.news = (out.newsMap && out.newsMap[s.ticker]) || '';
     const slot = L.results[s.ticker] || (L.results[s.ticker] = {});
     slot[provider] = res;
     ARCH = ARCH.filter(a => !(a.date === todayStr() && a.ticker === s.ticker && (a.provider || provOfRes(a.res)) === provider));
     ARCH.push({ date: todayStr(), weekKey: L.weekKey, ticker: s.ticker, name: s.name, chgW: s.chgW, provider: provider, res: res });
-    enqueueDoc({ date: todayStr(), time: new Date().toTimeString().slice(0, 5), ticker: s.ticker, name: s.name, chgW: s.chgW, provider: provider, model: res.model || '', cause: res.cause || '', category: res.category || '', irrational: res.irrational || '', reason: res.reason || '', reboundProb: (res.reboundProb === '' || res.reboundProb == null ? '' : res.reboundProb), keyPoints: res.keyPoints || '', raw: res.raw || '' });
   }
   saveJSON(LKEY, L);
   saveJSON(AKEY, ARCH);
   renderL(); updateLogView();
-  flushDocQueue();
 }
 
 async function analyzeOne(s) { await analyzeBatch([s], SET.provider); }
@@ -514,34 +531,101 @@ function updateLogView() {
   $('L_logView').textContent = md || '（今日尚無分析紀錄）';
 }
 
-/* ----- Google Doc 同步（Apps Script 橋接：每筆分析完成 append 進使用者自己的 Doc） ----- */
-function enqueueDoc(payload) {
-  DOCQ.push(payload);
-  saveJSON(QKEY, DOCQ);
+/* ----- 跨裝置同步（GitHub 私人 repo 的 data.json；token 只存本機） ----- */
+let syncBusy = false, syncTimer = null, remoteSha = null;
+
+function syncStatus(msg) { const el = $('L_docStatus'); if (el) el.textContent = msg; }
+function syncCfg() {
+  const t = (SET.syncToken || '').trim();
+  const repo = (SET.syncRepo || 'stock-research-data').trim();
+  return t ? { token: t, repo: repo } : null;
 }
-
-function docStatus(msg) { const el = $('L_docStatus'); if (el) el.textContent = msg; }
-
-async function flushDocQueue(manual) {
-  const url = (SET.docUrl || '').trim();
-  if (!DOCQ.length) {
-    if (manual) docStatus(url ? 'Google Doc：目前沒有待送紀錄' : 'Google Doc 未設定：先在專區設定貼上同步網址');
-    return;
+function ghApi(path, opts) {
+  const cfg = syncCfg();
+  const o = opts || {};
+  o.headers = Object.assign({ 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github+json' }, o.headers || {});
+  return fetch('https://api.github.com/repos/hebe2234/' + cfg.repo + path, o);
+}
+function encodeB64(str) { const bytes = new TextEncoder().encode(str); let bin = ''; bytes.forEach(b => { bin += String.fromCharCode(b); }); return btoa(bin); }
+function decodeB64(b64) { const bin = atob((b64 || '').replace(/\s/g, '')); const bytes = Uint8Array.from(bin, c => c.charCodeAt(0)); return new TextDecoder().decode(bytes); }
+function stripRes(res) { if (!res) return res; const c = Object.assign({}, res); delete c.news; return c; }
+function collectState() {
+  const results = {};
+  for (const t of Object.keys(L.results)) { const s = L.results[t] || {}; const o = {}; if (s.gemini) o.gemini = stripRes(s.gemini); if (s.local) o.local = stripRes(s.local); results[t] = o; }
+  return { v: 1, updatedAt: syncMeta.updatedAt || '', watchlist: stocks, losers: { weekKey: L.weekKey, fetchedAt: L.fetchedAt, list: L.list, results: results }, arch: ARCH.map(a => { const c = Object.assign({}, a); c.res = stripRes(a.res); return c; }) };
+}
+function mergeWatch(a, b) {
+  const m = new Map();
+  for (const s of (a || [])) m.set(s.id, s);
+  for (const s of (b || [])) { const old = m.get(s.id); if (!old || (s.updatedAt || '') >= (old.updatedAt || '')) m.set(s.id, s); }
+  return [...m.values()];
+}
+function mergeResults(a, b) {
+  const out = {};
+  const tickers = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+  for (const t of tickers) {
+    const o = {};
+    for (const p of ['gemini', 'local']) {
+      const x = a && a[t] ? a[t][p] : null, y = b && b[t] ? b[t][p] : null;
+      const pick = !x ? y : (!y ? x : (((y.at || '') > (x.at || '')) ? y : x));
+      if (pick) o[p] = pick;
+    }
+    if (Object.keys(o).length) out[t] = o;
   }
-  if (!url) { docStatus('Google Doc 未設定：' + DOCQ.length + ' 筆紀錄待送（設定貼上同步網址後會自動補送）'); return; }
-  if (docFlushing) return;
-  docFlushing = true;
-  let sent = 0;
-  while (DOCQ.length) {
-    try {
-      await fetch(url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(DOCQ[0]) });
-      DOCQ.shift(); sent++;
-      saveJSON(QKEY, DOCQ);
-    } catch (e) { break; }
+  return out;
+}
+function mergeArch(a, b) {
+  const m = new Map();
+  const key = e => e.date + '|' + e.ticker + '|' + (e.provider || provOfRes(e.res));
+  for (const e of (a || [])) m.set(key(e), e);
+  for (const e of (b || [])) { const k = key(e), old = m.get(k); if (!old || ((e.res && e.res.at) || '') >= ((old.res && old.res.at) || '')) m.set(k, e); }
+  return [...m.values()];
+}
+function mergeFromRemote(remote) {
+  syncApplying = true;
+  stocks = mergeWatch(stocks, remote.watchlist || []);
+  ARCH = mergeArch(ARCH, remote.arch || []);
+  if (remote.losers) {
+    if ((remote.losers.list || []).length && (remote.losers.weekKey || '') >= (L.weekKey || '')) { L.list = remote.losers.list; L.weekKey = remote.losers.weekKey; L.fetchedAt = remote.losers.fetchedAt || L.fetchedAt; }
+    L.results = mergeResults(L.results, remote.losers.results || {});
   }
-  docFlushing = false;
-  if (DOCQ.length) docStatus('Google Doc 同步中斷：已送 ' + sent + ' 筆，剩 ' + DOCQ.length + ' 筆待補送（下次分析或按補送會再試）');
-  else if (sent) docStatus('✅ 已記錄到 Google Doc（' + sent + ' 筆，' + new Date().toTimeString().slice(0, 8) + '）');
+  save(); saveJSON(LKEY, L); saveJSON(AKEY, ARCH);
+  syncApplying = false;
+  render(); renderL(); updateLogView();
+}
+function scheduleSync() {
+  try { if (!syncCfg()) return; } catch (e) { return; }
+  syncStatus('☁️ 有新變更，稍後自動同步…');
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => { syncNow(false); }, 2500);
+}
+async function syncNow(manual) {
+  const cfg = syncCfg();
+  if (!cfg) { if (manual) syncStatus('尚未設定同步 Token（到下方「跨裝置同步」貼上）'); return; }
+  if (syncBusy) return;
+  syncBusy = true; syncStatus('☁️ 同步中…');
+  try {
+    const g = await ghApi('/contents/data.json');
+    if (g.status === 401 || g.status === 403) { syncStatus('☁️ 同步失敗：Token 不正確或權限不足'); return; }
+    let remote = null;
+    if (g.ok) {
+      const gj = await g.json();
+      remoteSha = gj.sha;
+      if (gj.content) { try { remote = JSON.parse(decodeB64(gj.content)); } catch (e) { remote = null; } }
+    } else if (g.status !== 404) { syncStatus('☁️ 同步失敗（讀取 ' + g.status + '）'); return; }
+    if (remote) mergeFromRemote(remote);
+    if (!syncMeta.dirty && remote && (remote.updatedAt || '') <= (syncMeta.updatedAt || '')) { syncStatus('☁️ 已同步 ' + new Date().toTimeString().slice(0, 5)); return; }
+    const st = collectState();
+    st.updatedAt = new Date().toISOString();
+    const r = await ghApi('/contents/data.json', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'sync ' + st.updatedAt, content: encodeB64(JSON.stringify(st)), sha: remoteSha || undefined }) });
+    if (!r.ok) { syncStatus('☁️ 同步失敗（寫入 ' + r.status + (r.status === 422 ? '：資料過大或版本衝突，再按一次立即同步' : '') + '）'); return; }
+    const rj = await r.json().catch(() => ({}));
+    if (rj.content && rj.content.sha) remoteSha = rj.content.sha;
+    syncMeta.updatedAt = st.updatedAt; syncMeta.dirty = false;
+    try { localStorage.setItem(SYNC_META_KEY, JSON.stringify(syncMeta)); } catch (e) {}
+    syncStatus('☁️ 已同步 ' + new Date().toTimeString().slice(0, 5));
+  } catch (e) { syncStatus('☁️ 同步失敗：' + e.message); }
+  finally { syncBusy = false; }
 }
 
 $('L_btnLoad').addEventListener('click', async () => {
@@ -579,12 +663,13 @@ $('S_form').addEventListener('submit', (e) => {
   SET.model = $('S_model').value || 'gemini-2.5-flash,gemini-2.5-flash-lite';
   SET.grounding = $('S_grounding').value;
   SET.batch = $('S_batch').value;
-  SET.docUrl = $('S_docUrl').value.trim();
+  SET.syncToken = $('S_syncToken').value.trim();
+  SET.syncRepo = $('S_syncRepo').value.trim() || 'stock-research-data';
   saveJSON(SKEY, SET);
   $('S_status').textContent = '已儲存（' + new Date().toTimeString().slice(0, 8) + '）';
-  flushDocQueue();
+  syncNow(false);
 });
-$('L_btnSync').addEventListener('click', () => { flushDocQueue(true); });
+$('L_btnSyncNow').addEventListener('click', () => { syncNow(true); });
 $('L_btnDownloadLog').addEventListener('click', () => {
   const md = buildLog(todayStr());
   if (!md) { alert('今日尚無日誌'); return; }
@@ -625,28 +710,25 @@ $('S_geminiKey').value = SET.geminiKey || '';
 $('S_model').value = SET.model || 'gemini-2.5-flash,gemini-2.5-flash-lite';
 $('S_grounding').value = SET.grounding || '1';
 $('S_batch').value = SET.batch || '5';
-$('S_docUrl').value = SET.docUrl || '';
-$('S_btnTestDoc').addEventListener('click', async () => {
-  const url = $('S_docUrl').value.trim();
-  const el = $('S_docStatus');
-  if (!url) { el.textContent = '先貼上 Apps Script 網址並儲存設定'; return; }
-  el.textContent = '送出測試中…';
+$('S_syncToken').value = SET.syncToken || '';
+$('S_syncRepo').value = SET.syncRepo || 'stock-research-data';
+$('S_btnTestSync').addEventListener('click', async () => {
+  const repo = ($('S_syncRepo').value || 'stock-research-data').trim();
+  const tok = ($('S_syncToken').value || '').trim();
+  const el = $('S_syncStatus');
+  if (!tok) { el.textContent = '先貼上 Token'; return; }
+  el.textContent = '測試中…';
   try {
-    await fetch(url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify({ test: true, time: new Date().toTimeString().slice(0, 5) }) });
-    el.textContent = '已送出測試 — 去你的 Google Doc 看看有沒有出現「✅ 連線測試」那行（沒出現的話檢查部署存取權是否為「任何人」）';
-  } catch (e) {
-    el.textContent = '❌ 連不上：' + e.message + '（檢查網址是否以 /exec 結尾、部署是否完成）';
-  }
-});
-$('btnCopyGas').addEventListener('click', async () => {
-  const btn = $('btnCopyGas');
-  try { await navigator.clipboard.writeText($('gasCode').textContent); btn.textContent = '✅ 已複製，去 Apps Script 貼上'; }
-  catch (e) { btn.textContent = '複製失敗：手動全選下方程式碼複製'; }
-  setTimeout(() => { btn.textContent = '複製 Apps Script 腳本'; }, 3000);
+    const r = await fetch('https://api.github.com/repos/hebe2234/' + repo, { headers: { 'Authorization': 'Bearer ' + tok, 'Accept': 'application/vnd.github+json' } });
+    if (r.ok) { const j = await r.json(); el.textContent = j.private ? '✅ 連線成功（私人 repo，沒問題）' : '⚠️ 連線成功，但這個 repo 不是私人的，建議換私人 repo'; }
+    else if (r.status === 404) el.textContent = '❌ 找不到 repo，或 Token 沒有這個 repo 的權限（404）';
+    else if (r.status === 401) el.textContent = '❌ Token 不正確（401）';
+    else el.textContent = '❌ 連線失敗（' + r.status + '）';
+  } catch (e) { el.textContent = '❌ 連線失敗：' + e.message; }
 });
 renderL();
 updateLogView();
-flushDocQueue();
+syncNow(false);
 
 // ===== 詳情 / 比較彈窗 =====
 function showModal(html) { $('modalContent').innerHTML = html; $('modalOverlay').style.display = 'flex'; }
@@ -668,7 +750,7 @@ function analysisInner(res) {
   return '<div><strong>下跌主因：</strong>' + esc(res.cause || '') + '</div>' +
     '<div><strong>分類：</strong>' + esc(res.category || '') + '</div>' +
     '<div><strong>市場不理性：</strong>' + esc(res.irrational || '') + ' — ' + esc(res.reason || '') + '</div>' +
-    '<div><strong>反彈機率：</strong>' + esc(res.reboundProb) + '%</div>' +
+    '<div><strong>反彈機率：</strong><span style="color:' + probColor(res.reboundProb) + ';font-weight:700">' + esc(res.reboundProb) + '%</span></div>' +
     '<div><strong>觀察重點：</strong>' + esc(res.keyPoints || '') + '</div>' +
     newsHtml +
     '<div style="color:#5b6b7a;font-size:12.5px">' + esc((res.at || '').slice(0, 16).replace('T', ' ')) + ' / ' + esc(res.model || '') + '</div>';
