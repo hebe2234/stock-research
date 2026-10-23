@@ -191,7 +191,7 @@
       <details class="grp" id="grpGemini">
         <summary>🤖 Gemini 設定</summary>
         <div class="grid">
-          <div class="wide"><label>Gemini API Key（AI Studio 免費申請，貼在這裡就好，不要貼到聊天室）</label><input id="S_geminiKey" type="password" autocomplete="off" placeholder="AIza…"></div>
+          <div class="wide"><label>Gemini API Key（AI Studio 免費申請）</label><input id="S_geminiKey" type="password" autocomplete="off" placeholder="AIza…"></div>
           <div><label>Gemini 模型（額度滿自動換下一個）</label><input id="S_model" value="gemini-2.5-flash,gemini-2.5-flash-lite"></div>
           <div><label>分析時用 Google 搜尋查本週消息</label>
             <select id="S_grounding"><option value="1">開（建議）</option><option value="0">關</option></select></div>
@@ -211,13 +211,13 @@
         <div class="grid">
           <div><label>本地模式新聞來源</label>
             <select id="S_localNews"><option value="web">直接上網搜尋（Tavily）</option><option value="gdelt">GDELT 新聞標題（免 key）</option><option value="0">不附新聞</option></select></div>
-          <div><label>Tavily API Key（直接搜尋用，免費申請，貼這裡就好，不要貼到聊天室）</label><input id="S_tavilyKey" type="password" autocomplete="off" placeholder="tvly-…"></div>
+          <div><label>Tavily API Key（直接搜尋用，免費申請）</label><input id="S_tavilyKey" type="password" autocomplete="off" placeholder="tvly-…"></div>
         </div>
       </details>
       <details class="grp" id="grpSync">
         <summary>☁️ 跨裝置同步（GitHub）</summary>
         <div class="grid">
-          <div class="wide"><label>GitHub 同步 Token（fine-grained PAT，只給 stock-research-data 這個 repo 的 Contents 讀寫；貼這裡就好，不要貼到聊天室）</label><input id="S_syncToken" type="password" autocomplete="off" placeholder="github_pat_…"></div>
+          <div class="wide"><label>GitHub 同步 Token（fine-grained PAT，只給 stock-research-data 這個 repo 的 Contents 讀寫）</label><input id="S_syncToken" type="password" autocomplete="off" placeholder="github_pat_…"></div>
           <div><label>同步 repo 名稱</label><input id="S_syncRepo" value="stock-research-data"></div>
           <div><label>連線測試</label><button type="button" class="secondary" id="S_btnTestSync">測試同步連線</button> <span id="S_syncStatus" style="font-size:12.5px"></span></div>
         </div>
@@ -270,6 +270,6 @@
     <div id="modalContent"></div>
   </div>
 </div>
-<script src="app.js?v=19"></script>
+<script src="app.js?v=20"></script>
 </body>
 </html>
