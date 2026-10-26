@@ -217,8 +217,7 @@ async function fetchLosers() {
   const dstr = todayStr();
   HIST = HIST.filter(h => h.date !== dstr);
   HIST.unshift({ date: dstr, fetchedAt: L.fetchedAt, weekKey: wk, list: rows });
-  HIST = HIST.slice(0, 30);
-  saveJSON(HKEY, HIST);
+  saveJSON(HKEY, HIST); // 不設天數上限：長期追蹤用，刪除只在 user 指示時做
   viewDate = '';
   renderViewDateOptions();
 }
@@ -1051,7 +1050,7 @@ function mergePicks(a, b) {
   const m = new Map();
   for (const p of (a || [])) m.set(p.id, p);
   for (const p of (b || [])) if (!m.has(p.id)) m.set(p.id, p);
-  return [...m.values()].sort((x, y) => (y.at || '').localeCompare(x.at || '')).slice(0, 12);
+  return [...m.values()].sort((x, y) => (y.at || '').localeCompare(x.at || '')); // 選股歷史不限次數保留
 }
 function pickDigest() {
   const rows = [];
@@ -1104,7 +1103,6 @@ async function runPicks() {
     if (!picks.length) throw new Error('Gemini 回的代號都不在本週清單裡，請重跑一次');
     const entry = { id: todayStr() + 'T' + new Date().toTimeString().slice(0, 8), date: todayStr(), at: new Date().toISOString(), weekKey: L.weekKey, topN: topN, criteria: criteria, basedOn: rows.length, model: out.model, picks: picks };
     PICKS.unshift(entry);
-    PICKS = PICKS.slice(0, 12);
     saveJSON(PKEY, PICKS);
     renderPicks();
     $('P_status').textContent = '完成：從 ' + rows.length + ' 檔分析挑出 ' + picks.length + ' 檔（' + out.model + '）';
@@ -1146,7 +1144,7 @@ function mergeLosersHistory(a, b) {
   const m = new Map();
   for (const h of (a || [])) m.set(h.date, h);
   for (const h of (b || [])) { const old = m.get(h.date); if (!old || (h.fetchedAt || '') >= (old.fetchedAt || '')) m.set(h.date, h); }
-  return [...m.values()].sort((x, y) => (y.date || '').localeCompare(x.date || '')).slice(0, 30);
+  return [...m.values()].sort((x, y) => (y.date || '').localeCompare(x.date || '')); // 快照不限天數保留
 }
 async function fetchCurrentRow(ticker) {
   const rows = await tvScan({ filter: [{ left: 'name', operation: 'in_range', right: [ticker] }], range: [0, 1] });
