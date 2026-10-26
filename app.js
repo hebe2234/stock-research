@@ -226,8 +226,16 @@ async function fetchLosers() {
 function snapshotFor(date) { return HIST.find(h => h.date === date) || null; }
 function displayList() { return viewDate ? ((snapshotFor(viewDate) || {}).list || []) : L.list; }
 function archResFor(t, date, prov) {
-  const a = ARCH.find(e => e.ticker === t && e.date === date && (e.provider || provOfRes(e.res)) === prov);
-  return a ? a.res : null;
+  const snap = snapshotFor(date);
+  const wk = snap ? snap.weekKey : '';
+  const cands = ARCH.filter(e => e.ticker === t && (e.provider || provOfRes(e.res)) === prov);
+  const latest = (list) => { let best = null; for (const e of list) if (!best || ((e.res && e.res.at) || '') >= ((best.res && best.res.at) || '')) best = e; return best ? best.res : null; };
+  // 優先同週次（週一抓榜、週中分析也能對上）；其次同分析日期（舊資料無週次時）
+  if (wk) { const r = latest(cands.filter(e => e.weekKey === wk)); if (r) return r; }
+  const d = latest(cands.filter(e => e.date === date));
+  if (d) return d;
+  if (!wk) return latest(cands);
+  return null;
 }
 function viewRes(t, prov) {
   if (!viewDate) return resOf(t, prov);
@@ -276,7 +284,7 @@ function renderL() {
     : '';
   $('L_empty').style.display = disp.length ? 'none' : 'block';
   if (viewDate) {
-    $('L_progress').textContent = '顯示 ' + viewDate + ' 的榜單（唯讀：分析狀態為當日 ARCH 紀錄；切回「最新」才能開始分析）';
+    $('L_progress').textContent = '顯示 ' + viewDate + ' 的榜單（唯讀：分析狀態為該週 ARCH 紀錄；切回「最新」才能開始分析）';
     $('L_btnRun').disabled = true;
   } else {
     $('L_btnRun').disabled = running;
@@ -1155,8 +1163,8 @@ function showSnapshotModal(s, date) {
   let h = '<h3>' + esc(s.ticker) + ' ' + esc(s.name) + '</h3>' +
     '<div>產業：' + esc(s.sector || '–') + '・' + esc(date) + ' 榜單價 $' + num(s.price) + '・該週 ' + (s.chgW == null ? '–' : s.chgW.toFixed(1) + '%') + '・市值 ' + fmtMcap(s.mcap) + '</div>';
   h += '<div style="margin:10px 0">' + (isTracked(s.ticker) ? '<span style="color:#137333">已在追蹤專區 ✓</span>' : '<button class="small secondary" data-snap-track="' + esc(s.ticker) + '">＋ 加入追蹤（以現價計）</button>') + '</div>';
-  h += '<div class="k">🤖 Gemini（' + esc(date) + '）</div>' + analysisInner(g);
-  h += '<div class="k">🖥️ 本地模型（' + esc(date) + '）</div>' + analysisInner(l);
+  h += '<div class="k">🤖 Gemini（該週分析）</div>' + analysisInner(g);
+  h += '<div class="k">🖥️ 本地模型（該週分析）</div>' + analysisInner(l);
   const all = ARCH.filter(a => a.ticker === s.ticker).length;
   h += '<div style="font-size:12.5px;color:#45566a;margin-top:10px">該檔共 ' + all + ' 筆歷史分析；完整跨日期日誌請到追蹤專區的詳情查看。</div>';
   showModal(h);
