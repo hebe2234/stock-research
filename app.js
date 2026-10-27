@@ -547,17 +547,20 @@ async function analyzeOne(s) { await analyzeBatch([s], SET.provider); }
 
 async function runAnalysis() {
   if (running) return;
-  if (SET.provider !== 'local' && (!SET.geminiKey || !SET.geminiKey.trim())) { alert('先在專區設定填 Gemini API Key 並儲存'); $('S_geminiKey').focus(); return; }
+  // 開始分析用的供應商以按鈕旁的下拉為準（預設跟設定同步），跑完本地切 Gemini 不用再進設定區
+  const prov = ($('L_runProv') && $('L_runProv').value) || SET.provider;
+  const provName = prov === 'gemini' ? 'Gemini' : '本地';
+  if (prov !== 'local' && (!SET.geminiKey || !SET.geminiKey.trim())) { alert('先在專區設定填 Gemini API Key 並儲存'); $('S_geminiKey').focus(); return; }
   if (!L.list.length) { alert('先載入本週大跌榜'); return; }
-  if (SET.provider === 'local') {
+  if (prov === 'local') {
     $('L_progress').textContent = '連線本地模型中…';
     const okPing = await pingLocal();
     if (!okPing) { $('L_progress').textContent = '連不上本地模型：確認 llama-server 已啟動、endpoint 位址正確，且是在跑 llama 的那臺電腦開這個網站。'; return; }
     $('L_progress').textContent = '';
   }
-  const targets = L.list.filter(s => { const r = resOf(s.ticker, SET.provider); return !r || r.err; });
-  if (!targets.length) { $('L_progress').textContent = '本週榜單已全部分析完'; return; }
-  const batchSize = SET.provider === 'local' ? 1 : Math.max(1, parseInt(SET.batch, 10) || 5);
+  const targets = L.list.filter(s => { const r = resOf(s.ticker, prov); return !r || r.err; });
+  if (!targets.length) { $('L_progress').textContent = '本週榜單的「' + provName + '」分析已全部完成（要跑另一個供應商：把開始分析旁的「用」切換後再按）'; return; }
+  const batchSize = prov === 'local' ? 1 : Math.max(1, parseInt(SET.batch, 10) || 5);
   const batches = [];
   for (let i = 0; i < targets.length; i += batchSize) batches.push(targets.slice(i, i + batchSize));
   running = true; stopFlag = false;
@@ -566,21 +569,21 @@ async function runAnalysis() {
   for (let bi = 0; bi < batches.length; bi++) {
     if (stopFlag) break;
     const batch = batches[bi];
-    $('L_progress').textContent = '分析中（批次 ' + (bi + 1) + ' / ' + batches.length + '）：' + batch.map(s => s.ticker).join(', ') + '…';
+    $('L_progress').textContent = '分析中（' + provName + '，批次 ' + (bi + 1) + ' / ' + batches.length + '）：' + batch.map(s => s.ticker).join(', ') + '…';
     try {
-      await analyzeBatch(batch, SET.provider); okCount += batch.length;
+      await analyzeBatch(batch, prov); okCount += batch.length;
     } catch (e) {
       if (/^LOCALDOWN:/.test(e.message) || /Failed to fetch/i.test(e.message)) { $('L_progress').textContent = '連不上本地模型，先停下：確認 llama-server 有開、位址正確、在同一臺電腦開網站。'; break; }
       if (/^QUOTA:/.test(e.message)) { $('L_progress').textContent = '所有模型的免費額度都用完了，剩下的明天按「開始分析」會接著跑。'; break; }
       if (/401|403|API key/i.test(e.message)) { $('L_progress').textContent = 'Gemini 金鑰有問題，先停下：' + e.message; break; }
-      for (const s of batch) { const slot = L.results[s.ticker] || (L.results[s.ticker] = {}); slot[SET.provider] = { err: e.message, at: new Date().toISOString() }; }
+      for (const s of batch) { const slot = L.results[s.ticker] || (L.results[s.ticker] = {}); slot[prov] = { err: e.message, at: new Date().toISOString() }; }
       saveJSON(LKEY, L); renderL();
     }
-    if (!stopFlag) await sleep(SET.provider === 'local' ? 1000 : 6500);
+    if (!stopFlag) await sleep(prov === 'local' ? 1000 : 6500);
   }
   running = false;
   $('L_btnRun').disabled = false; $('L_btnStop').disabled = true;
-  if (!stopFlag && okCount) $('L_progress').textContent = '本輪完成（新增 ' + okCount + ' 檔）。已分析 ' + doneCount(SET.provider) + ' / ' + L.list.length;
+  if (!stopFlag && okCount) $('L_progress').textContent = '本輪完成（' + provName + ' 新增 ' + okCount + ' 檔）。' + provName + ' 已分析 ' + doneCount(prov) + ' / ' + L.list.length;
   renderL();
 }
 
@@ -769,6 +772,7 @@ $('L_tbody').addEventListener('click', async (e) => {
 $('S_form').addEventListener('submit', (e) => {
   e.preventDefault();
   SET.provider = $('S_provider').value;
+  if ($('L_runProv')) $('L_runProv').value = SET.provider;
   SET.localEndpoint = $('S_localEndpoint').value;
   SET.localModel = $('S_localModel').value;
   SET.localApiKey = $('S_localApiKey').value;
@@ -797,6 +801,7 @@ $('L_btnDownloadLog').addEventListener('click', () => {
 });
 
 $('S_provider').value = SET.provider || 'gemini';
+if ($('L_runProv')) $('L_runProv').value = SET.provider || 'gemini';
 $('S_localEndpoint').value = SET.localEndpoint || 'http://localhost:8080';
 $('S_localModel').value = SET.localModel || 'qwen3-coder-30b-a3b-instruct-q4_k_m.gguf';
 $('S_localApiKey').value = SET.localApiKey || '';
@@ -841,7 +846,7 @@ $('S_btnTestSync').addEventListener('click', async () => {
     else el.textContent = '❌ 連線失敗（' + r.status + '）';
   } catch (e) { el.textContent = '❌ 連線失敗：' + e.message; }
 });
-$('L_ver').textContent = 'v3.7';
+$('L_ver').textContent = 'v3.7.1';
 renderL();
 renderViewDateOptions();
 updateLogView();
