@@ -122,13 +122,19 @@
     <h2 style="margin:0 0 6px;font-size:20px">📉 本週大跌股專區 — 第一性原理 × Gemini</h2>
     <p style="font-size:13px;color:#45566a;line-height:1.6;margin:0 0 12px">
       每週抓下跌最多的前 100 檔（NASDAQ / NYSE / AMEX、股價 ≥ $5、市值 ≥ $300M，先擋掉仙股洗版）。
-      按「開始分析」後，AI（Gemini 或本地 llama.cpp，在下方設定切換）才會逐一分析：下跌主因、是否市場不理性、反彈機率。分析結果會自動同步到你的私人 GitHub repo（在下方「跨裝置同步」貼一次 token），手機和另一台電腦打開就是同一份資料。
+      按「開始分析」後，AI 會逐一分析：下跌主因、是否市場不理性、反彈機率。分析結果會自動同步到你的私人 GitHub repo（在下方「跨裝置同步」貼一次 token），手機和另一台電腦打開就是同一份資料。
       中途可停止，隔天按了會接著分析還沒跑的。
     </p>
     <div class="toolbar">
       <button id="L_btnLoad">↻ 載入本週大跌榜</button>
       <span id="L_weekLabel" style="font-size:13px;color:#45566a"></span>
       <button id="L_btnRun">▶ 開始分析</button>
+      <label style="font-size:13.5px">用：
+        <select id="L_runProv">
+          <option value="gemini">Gemini</option>
+          <option value="local">本地模型</option>
+        </select>
+      </label>
       <button id="L_btnStop" class="secondary" disabled>⏸ 停止</button>
       <span id="L_progress" style="font-size:13px"></span>
     </div>
@@ -273,6 +279,6 @@
     <div id="modalContent"></div>
   </div>
 </div>
-<script src="app.js?v=23"></script>
+<script src="app.js?v=24"></script>
 </body>
 </html>
