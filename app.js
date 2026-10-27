@@ -186,8 +186,8 @@ function probColor(p) { const n = Math.max(0, Math.min(100, Number(p) || 0)); re
 const FLAG_RE = /私人公司|未上市|尚未上市|沒有公開上市|未公開上市|不存在的公司|無法識別公司|private company|not (publicly )?(listed|traded)/i;
 function doneCount(prov) { return L.list.filter(s => { const r = resOf(s.ticker, prov); return r && !r.err; }).length; }
 
-const TV_COLS = ['name', 'description', 'close', 'change|1W', 'volume', 'market_cap_basic', 'sector', 'exchange'];
-function tvRow(d) { return { ticker: d[0], name: d[1], price: d[2], chgW: d[3], volume: d[4], mcap: d[5], sector: d[6], exchange: d[7] || '' }; }
+const TV_COLS = ['name', 'description', 'close', 'change|1W', 'volume', 'market_cap_basic', 'sector', 'exchange', 'change|1M', 'change|3M', 'change|1Y'];
+function tvRow(d) { return { ticker: d[0], name: d[1], price: d[2], chgW: d[3], volume: d[4], mcap: d[5], sector: d[6], exchange: d[7] || '', chg1M: d[8] == null ? null : d[8], chg3M: d[9] == null ? null : d[9], chg1Y: d[10] == null ? null : d[10] }; }
 async function tvScan(extra) {
   const body = Object.assign({ options: { lang: 'en' }, markets: ['america'], symbols: { query: { types: ['stock'] } }, columns: TV_COLS }, extra || {});
   const r = await fetch('https://scanner.tradingview.com/america/scan', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(body) });
@@ -270,6 +270,7 @@ function detailHTML(s, res) {
   if (res.raw) return '<strong>Gemini 原始回覆（格式解析失敗，原文保留）：</strong><br>' + esc(res.raw).replace(/\n/g, '<br>');
   return '<strong>下跌主因：</strong>' + esc(res.cause || '') + '<br>' +
     '<strong>分類：</strong>' + esc(res.category || '') + '<br>' +
+    (res.pattern ? '<strong>型態：</strong>' + esc(res.pattern) + '<br>' : '') +
     '<strong>市場不理性：</strong>' + esc(res.irrational || '') + ' — ' + esc(res.reason || '') + '<br>' +
     '<strong>反彈機率（1–3 個月漲回跌前價位）：</strong>' + esc(res.reboundProb) + '%<br>' +
     '<strong>觀察重點：</strong>' + esc(res.keyPoints || '') + '<br>' +
@@ -299,7 +300,9 @@ function renderL() {
     const probPart = (tag, r) => (r && !r.err && r.reboundProb !== '' && r.reboundProb != null) ? tag + ' <span style="color:' + probColor(r.reboundProb) + ';font-weight:700">' + r.reboundProb + '%</span>' : '';
     const prob = [probPart('G', g), probPart('本', l)].filter(Boolean).join('・') || '–';
     const tracked = typeof isTracked === 'function' && isTracked(s.ticker);
-    let row = '<tr><td>' + (i + 1) + '</td><td><input type="checkbox" data-track="' + esc(s.ticker) + '"' + (tracked ? ' checked disabled' : '') + ' title="加入追蹤專區" style="width:16px;height:16px;cursor:pointer"></td><td><strong>' + esc(s.ticker) + '</strong></td><td class="ellipsis" title="' + esc(s.name) + '">' + esc(s.name) + '</td><td>' + esc(s.sector) + '</td>' +
+    const pat = (g && g.pattern) || (l && l.pattern) || '';
+    const patTag = pat === '漲多修正' ? '<div style="font-size:11px;color:#b45309;font-weight:700">⚠️ 漲多修正</div>' : (pat === '趨勢反轉' ? '<div style="font-size:11px;color:#b3261e;font-weight:700">趨勢反轉</div>' : '');
+    let row = '<tr><td>' + (i + 1) + '</td><td><input type="checkbox" data-track="' + esc(s.ticker) + '"' + (tracked ? ' checked disabled' : '') + ' title="加入追蹤專區" style="width:16px;height:16px;cursor:pointer"></td><td><strong>' + esc(s.ticker) + '</strong>' + patTag + '</td><td class="ellipsis" title="' + esc(s.name) + '">' + esc(s.name) + '</td><td>' + esc(s.sector) + '</td>' +
       '<td class="num">' + num(s.price) + '</td><td class="num" style="color:#b3261e">' + (s.chgW == null ? '–' : s.chgW.toFixed(1) + '%') + '</td>' +
       '<td class="num">' + fmtMcap(s.mcap) + '</td><td>' + status + '</td><td>' + irr + '</td><td class="num">' + prob + '</td>' +
       (viewDate
@@ -320,6 +323,11 @@ function models() {
 function buildBatchPrompt(batch, newsMap) {
   const lines = batch.map(s => {
     let line = '- ' + s.ticker + '（' + s.name + '，產業：' + (s.sector || '未知') + '）：本週漲跌 ' + (s.chgW == null ? '?' : s.chgW.toFixed(1)) + '%，現價 $' + s.price + '，市值約 ' + fmtMcap(s.mcap);
+    const lt = [];
+    if (s.chg1M != null) lt.push('近 1 個月 ' + s.chg1M.toFixed(1) + '%');
+    if (s.chg3M != null) lt.push('近 3 個月 ' + s.chg3M.toFixed(1) + '%');
+    if (s.chg1Y != null) lt.push('近 1 年 ' + s.chg1Y.toFixed(1) + '%');
+    if (lt.length) line += '（長期漲幅：' + lt.join('、') + '）';
     const nw = newsMap && newsMap[s.ticker];
     if (nw) line += '\n  近期查證資訊：' + nw;
     return line;
@@ -328,8 +336,8 @@ function buildBatchPrompt(batch, newsMap) {
   const today = nowD.getFullYear() + ' 年 ' + (nowD.getMonth() + 1) + ' 月 ' + nowD.getDate() + ' 日';
   return '今天是 ' + today + '。你是股票分析師，用第一性原理逐一分析以下美股本週（最近 7 天）大跌的原因。清單：\n' + lines +
     '\n【日期規則】新聞標題後括號內是該新聞的發布日期。禁止使用「本週、上週、今年、去年、近期、近日、最近、本月」等相對時間詞：dropCause 裡寫到任何消息或事件，一律註明確切日期（YYYY-MM-DD，照抄新聞的日期）；只知道月份就寫 YYYY-MM；日期不明就寫「日期不詳」；嚴禁自行推測年份，絕對不要寫成過去的年份。【誠實規則】沒有資料就明寫「無資料」，嚴禁用推測冒充事實；要推測可以，但必須標明「推測」。' +
-    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）。【資訊規則】有附查證資訊的，必須以其為主要依據，不得忽略另編原因；沒有附查證資訊的，dropCause 開頭必須寫「（無即時新聞可查）」，只能依股價表現做保守推測，嚴禁編造具體事件、數字或日期。【查證規則】每檔先用搜尋查證該代號目前的上市狀態（注意近期 IPO、更名、併購、下市）；清單裡的股價、市值、漲跌幅都是真實市場數據，若第一時間查不到公司，換關鍵字（代號＋IPO、代號＋Nasdaq、公司名＋stock）再查，不可用「私人公司／未上市／不存在」當結論，除非搜尋證據明確支持。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
-    '{"ticker":"代號","dropCause":"下跌主因，一段話，註明消息日期","category":"基本面惡化|消息面一次性衝擊|市場情緒/資金面|產業系統性|不明",' +
+    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）。【資訊規則】有附查證資訊的，必須以其為主要依據，不得忽略另編原因；沒有附查證資訊的，dropCause 開頭必須寫「（無即時新聞可查）」，只能依股價表現做保守推測，嚴禁編造具體事件、數字或日期。【查證規則】每檔先用搜尋查證該代號目前的上市狀態（注意近期 IPO、更名、併購、下市）；清單裡的股價、市值、漲跌幅都是真實市場數據，若第一時間查不到公司，換關鍵字（代號＋IPO、代號＋Nasdaq、公司名＋stock）再查，不可用「私人公司／未上市／不存在」當結論，除非搜尋證據明確支持。【型態判斷】只看本週跌幅會誤判，必須先對照長期漲幅判斷下跌型態：超賣反彈（長期漲幅普通、本週因一次性消息超跌）／漲多修正（過去 3 個月或 1 年漲幅巨大、本週只是從高點回落）／趨勢反轉（基本面惡化且長期走弱）。反彈機率定義為「漲回下跌前價位」的機率：漲多修正的股票即使短期有技術反彈，回到前高也難，反彈機率應給低，除非有基本面新利多支撐更高價；漲多回調不算市場不理性，不得因本週跌得多就判「是」。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
+    '{"ticker":"代號","dropCause":"下跌主因，一段話，註明消息日期","pattern":"超賣反彈|漲多修正|趨勢反轉|不明","category":"基本面惡化|消息面一次性衝擊|市場情緒/資金面|產業系統性|不明",' +
     '"irrational":"是|否|部分","irrationalReason":"為什麼這樣判斷，公司核心基本面是否實質受損","reboundProb":0到100的整數（未來1到3個月漲回本週下跌前價位的機率）,' +
     '"keyPoints":"投資人該觀察的2到3個驗證點"}';
 }
@@ -511,7 +519,7 @@ function parseBatch(text) {
       if (Array.isArray(kp)) kp = kp.join('；');
       let prob = parseInt(o.reboundProb, 10);
       if (isNaN(prob)) prob = '';
-      map[String(o.ticker).toUpperCase()] = { cause: o.dropCause || o.cause || '', category: o.category || '', irrational: o.irrational || '', reason: o.irrationalReason || o.reason || '', reboundProb: prob, keyPoints: kp || '' };
+      map[String(o.ticker).toUpperCase()] = { cause: o.dropCause || o.cause || '', pattern: o.pattern || '', category: o.category || '', irrational: o.irrational || '', reason: o.irrationalReason || o.reason || '', reboundProb: prob, keyPoints: kp || '' };
     }
   }
   return map;
@@ -606,6 +614,7 @@ function buildLog(date) {
       if (r.raw) { md += '- 原始回覆（解析失敗，原文保留）：\n' + r.raw + '\n'; continue; }
       md += '- 下跌主因：' + (r.cause || '') + '\n';
       md += '- 分類：' + (r.category || '') + '\n';
+      if (r.pattern) md += '- 型態：' + r.pattern + '\n';
       md += '- 市場不理性：' + (r.irrational || '') + ' — ' + (r.reason || '') + '\n';
       md += '- 反彈機率（1–3 個月漲回跌前價位）：' + (r.reboundProb === '' || r.reboundProb == null ? '–' : r.reboundProb + '%') + '\n';
       md += '- 觀察重點：' + (r.keyPoints || '') + '\n';
@@ -846,7 +855,7 @@ $('S_btnTestSync').addEventListener('click', async () => {
     else el.textContent = '❌ 連線失敗（' + r.status + '）';
   } catch (e) { el.textContent = '❌ 連線失敗：' + e.message; }
 });
-$('L_ver').textContent = 'v3.7.1';
+$('L_ver').textContent = 'v3.8';
 renderL();
 renderViewDateOptions();
 updateLogView();
@@ -871,6 +880,7 @@ function analysisInner(res) {
   if (res.raw) return '<div>原始回覆（解析失敗，原文保留）：</div><div>' + esc(res.raw).replace(/\n/g, '<br>') + '</div>' + newsHtml;
   return '<div><strong>下跌主因：</strong>' + esc(res.cause || '') + '</div>' +
     '<div><strong>分類：</strong>' + esc(res.category || '') + '</div>' +
+    (res.pattern ? '<div><strong>型態：</strong>' + esc(res.pattern) + '</div>' : '') +
     '<div><strong>市場不理性：</strong>' + esc(res.irrational || '') + ' — ' + esc(res.reason || '') + '</div>' +
     '<div><strong>反彈機率：</strong><span style="color:' + probColor(res.reboundProb) + ';font-weight:700">' + esc(res.reboundProb) + '%</span></div>' +
     '<div><strong>觀察重點：</strong>' + esc(res.keyPoints || '') + '</div>' +
@@ -878,10 +888,17 @@ function analysisInner(res) {
     '<div style="color:#5b6b7a;font-size:12.5px">' + esc((res.at || '').slice(0, 16).replace('T', ' ')) + ' / ' + esc(res.model || '') + '</div>';
 }
 
+function ltText(s) {
+  const parts = [];
+  if (s.chg1M != null) parts.push('近 1 月 ' + s.chg1M.toFixed(1) + '%');
+  if (s.chg3M != null) parts.push('近 3 月 ' + s.chg3M.toFixed(1) + '%');
+  if (s.chg1Y != null) parts.push('近 1 年 ' + s.chg1Y.toFixed(1) + '%');
+  return parts.length ? '・長期：' + parts.join('、') : '';
+}
 function showStockModal(s) {
   const g = resOf(s.ticker, 'gemini'), l = resOf(s.ticker, 'local');
   let h = '<h3>' + esc(s.ticker) + ' ' + esc(s.name) + '</h3>' +
-    '<div>產業：' + esc(s.sector || '–') + '・現價 $' + num(s.price) + '・本週 ' + (s.chgW == null ? '–' : s.chgW.toFixed(1) + '%') + '・市值 ' + fmtMcap(s.mcap) + '</div>';
+    '<div>產業：' + esc(s.sector || '–') + '・現價 $' + num(s.price) + '・本週 ' + (s.chgW == null ? '–' : s.chgW.toFixed(1) + '%') + ltText(s) + '・市值 ' + fmtMcap(s.mcap) + '</div>';
   if (g && l && !g.err && !l.err && !g.raw && !l.raw) {
     const same = (g.irrational || '') === (l.irrational || '');
     const dp = (typeof g.reboundProb === 'number' && typeof l.reboundProb === 'number') ? Math.abs(g.reboundProb - l.reboundProb) : null;
@@ -1083,10 +1100,10 @@ async function runPicks() {
   const criteria = $('P_criteria').value.trim();
   const digest = rows.map(({ s, r }) =>
     '- ' + s.ticker + '（' + s.name + '，' + (s.sector || '未知') + '）：本週 ' + (s.chgW == null ? '?' : s.chgW.toFixed(1)) + '%，現價 $' + s.price + '，市值 ' + fmtMcap(s.mcap) +
-    '｜主因：' + (r.cause || '') + '｜分類：' + (r.category || '') + '｜不理性：' + (r.irrational || '') + '（' + (r.reason || '') + '）｜反彈機率：' + (r.reboundProb === '' || r.reboundProb == null ? '–' : r.reboundProb + '%') + '｜重點：' + (r.keyPoints || '')
+    '｜主因：' + (r.cause || '') + '｜型態：' + (r.pattern || '–') + '｜長期漲幅：' + (s.chg1M != null || s.chg3M != null || s.chg1Y != null ? ltText(s).replace('・長期：', '') : '–') + '｜分類：' + (r.category || '') + '｜不理性：' + (r.irrational || '') + '（' + (r.reason || '') + '）｜反彈機率：' + (r.reboundProb === '' || r.reboundProb == null ? '–' : r.reboundProb + '%') + '｜重點：' + (r.keyPoints || '')
   ).join('\n');
   const prompt = '你是選股分析師。以下是本週大跌股逐一的第一性原理分析日誌，共 ' + rows.length + ' 檔。請從中挑出最值得進一步研究與布局的前 ' + topN + ' 檔並排序。' +
-    '評選標準：跌因偏一次性或情緒面而非基本面永久受損、市場反應過度（錯殺）、反彈機率高、風險可控；同分時偏好市值較大、流動性較好的。' +
+    '評選標準：跌因偏一次性或情緒面而非基本面永久受損、市場反應過度（錯殺）、反彈機率高、風險可控；同分時偏好市值較大、流動性較好的。漲多修正型（過去漲幅巨大後的回調）即使短期反彈機率高，回到前高也難，評分應打折。' +
     (criteria ? '使用者額外條件：' + criteria + '。' : '') +
     '\n只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。每個物件欄位：{"ticker":"代號","score":0到100的整數（綜合分數）,"reason":"入選理由，一到兩句","risk":"最大風險，一句"}' +
     '\n分析日誌：\n' + digest;
@@ -1166,7 +1183,7 @@ async function fetchCurrentRow(ticker) {
 function showSnapshotModal(s, date) {
   const g = archResFor(s.ticker, date, 'gemini'), l = archResFor(s.ticker, date, 'local');
   let h = '<h3>' + esc(s.ticker) + ' ' + esc(s.name) + '</h3>' +
-    '<div>產業：' + esc(s.sector || '–') + '・' + esc(date) + ' 榜單價 $' + num(s.price) + '・該週 ' + (s.chgW == null ? '–' : s.chgW.toFixed(1) + '%') + '・市值 ' + fmtMcap(s.mcap) + '</div>';
+    '<div>產業：' + esc(s.sector || '–') + '・' + esc(date) + ' 榜單價 $' + num(s.price) + '・該週 ' + (s.chgW == null ? '–' : s.chgW.toFixed(1) + '%') + ltText(s) + '・市值 ' + fmtMcap(s.mcap) + '</div>';
   h += '<div style="margin:10px 0">' + (isTracked(s.ticker) ? '<span style="color:#137333">已在追蹤專區 ✓</span>' : '<button class="small secondary" data-snap-track="' + esc(s.ticker) + '">＋ 加入追蹤（以現價計）</button>') + '</div>';
   h += '<div class="k">🤖 Gemini（該週分析）</div>' + analysisInner(g);
   h += '<div class="k">🖥️ 本地模型（該週分析）</div>' + analysisInner(l);
