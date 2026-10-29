@@ -148,6 +148,10 @@ let PICKS = loadJSON(PKEY, []);
 const HKEY = 'stockResearch.losersHistory.v1';
 let HIST = loadJSON(HKEY, []);
 let viewDate = ''; // '' = 最新榜單；否則為檢視中的快照日期（唯讀）
+const BKEY = 'stockResearch.benchObs.v1';
+let BENCH = loadJSON(BKEY, {}); // 本站觀察到的 S&P 500 水準 {日期: 收盤}，隨跨裝置同步走
+let BENCH_STATIC = null; // bench.json：S&P 500 歷史收盤（同源靜態檔）
+let SPX_NOW = null;
 let SET = loadJSON(SKEY, { geminiKey: '', model: 'gemini-2.5-flash', grounding: '1' });
 SET.provider = SET.provider || 'gemini';
 SET.localEndpoint = SET.localEndpoint || 'http://localhost:8080';
@@ -173,7 +177,7 @@ function markDataChanged() {
 }
 
 function loadJSON(k, dft) { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? dft : v; } catch (e) { return dft; } }
-function saveJSON(k, v) { localStorage.setItem(k, JSON.stringify(v)); if ((k === LKEY || k === AKEY || k === TKEY || k === PKEY || k === HKEY) && !syncApplying) markDataChanged(); }
+function saveJSON(k, v) { localStorage.setItem(k, JSON.stringify(v)); if ((k === LKEY || k === AKEY || k === TKEY || k === PKEY || k === HKEY || k === BKEY) && !syncApplying) markDataChanged(); }
 function pad2(n) { return String(n).padStart(2, '0'); }
 function dateStr(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
 function todayStr() { return dateStr(new Date()); }
@@ -649,7 +653,7 @@ function stripRes(res) { if (!res) return res; const c = Object.assign({}, res);
 function collectState() {
   const results = {};
   for (const t of Object.keys(L.results)) { const s = L.results[t] || {}; const o = {}; if (s.gemini) o.gemini = stripRes(s.gemini); if (s.local) o.local = stripRes(s.local); results[t] = o; }
-  return { v: 1, updatedAt: syncMeta.updatedAt || '', watchlist: stocks, losers: { weekKey: L.weekKey, fetchedAt: L.fetchedAt, list: L.list, results: results }, arch: ARCH.map(a => { const c = Object.assign({}, a); c.res = stripRes(a.res); return c; }), track: TRACK, picks: PICKS, losersHistory: HIST };
+  return { v: 1, updatedAt: syncMeta.updatedAt || '', watchlist: stocks, losers: { weekKey: L.weekKey, fetchedAt: L.fetchedAt, list: L.list, results: results }, arch: ARCH.map(a => { const c = Object.assign({}, a); c.res = stripRes(a.res); return c; }), track: TRACK, picks: PICKS, losersHistory: HIST, bench: BENCH };
 }
 function mergeWatch(a, b) {
   const m = new Map();
@@ -685,6 +689,7 @@ function mergeFromRemote(remote) {
   TRACK = mergeTrack(TRACK, remote.track || []);
   PICKS = mergePicks(PICKS, remote.picks || []);
   HIST = mergeLosersHistory(HIST, remote.losersHistory || []);
+  BENCH = Object.assign({}, remote.bench || {}, BENCH);
   if (remote.losers) {
     // 榜單以「抓取時間」決勝負：同週舊榜單不得蓋掉剛抓的新榜單（原先只比週次就是 10-26 刷新後幾秒變回舊榜的原因）
     const rw = remote.losers.weekKey || '', lw = L.weekKey || '';
@@ -692,7 +697,7 @@ function mergeFromRemote(remote) {
     if ((remote.losers.list || []).length && (rw > lw || (rw === lw && rf > lf))) { L.list = remote.losers.list; L.weekKey = rw; L.fetchedAt = rf; }
     L.results = mergeResults(L.results, remote.losers.results || {});
   }
-  save(); saveJSON(LKEY, L); saveJSON(AKEY, ARCH); saveJSON(TKEY, TRACK); saveJSON(PKEY, PICKS); saveJSON(HKEY, HIST);
+  save(); saveJSON(LKEY, L); saveJSON(AKEY, ARCH); saveJSON(TKEY, TRACK); saveJSON(PKEY, PICKS); saveJSON(HKEY, HIST); saveJSON(BKEY, BENCH);
   syncApplying = false;
   render(); renderL(); updateLogView(); renderTrack(); renderPicks(); renderViewDateOptions();
 }
@@ -855,7 +860,7 @@ $('S_btnTestSync').addEventListener('click', async () => {
     else el.textContent = '❌ 連線失敗（' + r.status + '）';
   } catch (e) { el.textContent = '❌ 連線失敗：' + e.message; }
 });
-$('L_ver').textContent = 'v3.8';
+$('L_ver').textContent = 'v3.9';
 renderL();
 renderViewDateOptions();
 updateLogView();
@@ -972,7 +977,7 @@ document.querySelectorAll('details.grp').forEach(d => {
 function isTracked(t) { return TRACK.some(x => x.ticker === t); }
 function addTrack(s) {
   if (!s || isTracked(s.ticker)) return;
-  TRACK.push({ ticker: s.ticker, name: s.name || '', sector: s.sector || '', exchange: s.exchange || '', addedAt: todayStr(), addedPrice: (s.price == null ? null : s.price), addedChgW: (s.chgW == null ? null : s.chgW), price: (s.price == null ? null : s.price), chgW: (s.chgW == null ? null : s.chgW), mcap: s.mcap || null, priceAt: '' });
+  TRACK.push({ ticker: s.ticker, name: s.name || '', sector: s.sector || '', exchange: s.exchange || '', addedAt: todayStr(), addedPrice: (s.price == null ? null : s.price), addedChgW: (s.chgW == null ? null : s.chgW), price: (s.price == null ? null : s.price), chgW: (s.chgW == null ? null : s.chgW), mcap: s.mcap || null, priceAt: '', spxAtAdd: SPX_NOW });
   saveJSON(TKEY, TRACK);
 }
 function removeTrack(t) {
@@ -1000,9 +1005,11 @@ function renderTrack() {
   tb.innerHTML = rows.map(x => {
     const since = (x.price != null && x.addedPrice) ? ((x.price / x.addedPrice - 1) * 100) : null;
     const sinceTxt = since == null ? '–' : '<span style="color:' + (since >= 0 ? '#137333' : '#b3261e') + ';font-weight:700">' + (since >= 0 ? '+' : '') + since.toFixed(1) + '%</span>';
+    const bchg = benchChgFor(x);
+    const bchgTxt = bchg == null ? '–' : '<span style="color:' + (bchg >= 0 ? '#137333' : '#b3261e') + ';font-weight:700">' + (bchg >= 0 ? '+' : '') + bchg.toFixed(1) + '%</span>';
     return '<tr><td><strong>' + esc(x.ticker) + '</strong></td><td class="ellipsis" title="' + esc(x.name) + '">' + esc(x.name) + '</td>' +
       '<td>' + esc(x.addedAt || '') + '</td><td class="num">' + num(x.addedPrice) + '</td><td class="num">' + num(x.price) + '</td>' +
-      '<td class="num">' + sinceTxt + '</td><td class="num" style="color:#b3261e">' + (x.chgW == null ? '–' : x.chgW.toFixed(1) + '%') + '</td>' +
+      '<td class="num">' + sinceTxt + '</td><td class="num">' + bchgTxt + '</td><td class="num" style="color:#b3261e">' + (x.chgW == null ? '–' : x.chgW.toFixed(1) + '%') + '</td>' +
       '<td>' + trackHistCount(x.ticker) + ' 筆</td>' +
       '<td><button class="small secondary" data-tbtn="detail" data-t="' + esc(x.ticker) + '">詳情</button> ' +
       '<button class="small danger" data-tbtn="remove" data-t="' + esc(x.ticker) + '">移除</button></td></tr>';
@@ -1021,9 +1028,54 @@ async function refreshTrackedPrices() {
       if (m) { x.price = m.price; x.chgW = m.chgW; x.mcap = m.mcap; if (m.exchange) x.exchange = m.exchange; x.priceAt = new Date().toISOString(); hit++; }
     });
     saveJSON(TKEY, TRACK);
+    try { const v = await fetchSpxNow(); if (v) { SPX_NOW = v; BENCH[todayStr()] = v; saveJSON(BKEY, BENCH); } } catch (e) { /* 大盤抓不到不影響個股刷新 */ }
     renderTrack();
     $('T_status').textContent = '已刷新 ' + hit + ' / ' + TRACK.length + ' 檔（' + new Date().toTimeString().slice(0, 5) + '）';
   } catch (e) { $('T_status').textContent = '刷新失敗：' + e.message; }
+}
+
+/* ----- 大盤對照（S&P 500 同期漲跌） ----- */
+async function fetchSpxNow() {
+  const body = { options: { lang: 'en' }, symbols: { query: { types: ['index'] } }, filter: [{ left: 'name', operation: 'in_range', right: ['SPX'] }], columns: ['name', 'close'], range: [0, 1] };
+  const r = await fetch('https://scanner.tradingview.com/america/scan', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('TradingView 回應 ' + r.status);
+  const j = await r.json();
+  const d = ((j.data || [])[0] || {}).d || [];
+  return d[1] == null ? null : d[1];
+}
+let benchLoading = null;
+function ensureBench() {
+  if (benchLoading) return benchLoading;
+  benchLoading = (async () => {
+    if (BENCH_STATIC === null) {
+      try { const r = await fetch('bench.json', { cache: 'no-cache' }); BENCH_STATIC = r.ok ? await r.json() : {}; }
+      catch (e) { BENCH_STATIC = {}; }
+    }
+    try {
+      const v = await fetchSpxNow();
+      if (v) { SPX_NOW = v; if (BENCH[todayStr()] !== v) { BENCH[todayStr()] = v; saveJSON(BKEY, BENCH); } }
+    } catch (e) { /* 抓不到大盤就顯示 – */ }
+    renderTrack();
+  })();
+  return benchLoading;
+}
+function spxBaseFor(x) {
+  if (x.spxAtAdd) return x.spxAtAdd;
+  if (!x.addedAt) return null;
+  const d = new Date(x.addedAt + 'T12:00:00');
+  for (let i = 0; i < 10; i++) {
+    const ds = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    if (BENCH[ds]) return BENCH[ds];
+    if (BENCH_STATIC && BENCH_STATIC[ds]) return BENCH_STATIC[ds];
+    d.setDate(d.getDate() - 1);
+  }
+  return null;
+}
+function benchChgFor(x) {
+  if (SPX_NOW == null) return null;
+  const base = spxBaseFor(x);
+  if (!base) return null;
+  return (SPX_NOW / base - 1) * 100;
 }
 function showTrackModal(t) {
   const x = TRACK.find(v => v.ticker === t);
@@ -1052,6 +1104,7 @@ $('T_tbody').addEventListener('click', (e) => {
   else if (btn.dataset.tbtn === 'remove') { if (confirm('把 ' + btn.dataset.t + ' 移出追蹤區？（分析日誌會保留）')) removeTrack(btn.dataset.t); }
 });
 $('T_btnRefresh').addEventListener('click', refreshTrackedPrices);
+ensureBench();
 $('modalContent').addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-tact]');
   if (!btn) return;
