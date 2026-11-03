@@ -306,7 +306,9 @@ function renderL() {
     const tracked = typeof isTracked === 'function' && isTracked(s.ticker);
     const pat = (g && g.pattern) || (l && l.pattern) || '';
     const patTag = pat === '漲多修正' ? '<div style="font-size:11px;color:#b45309;font-weight:700">⚠️ 漲多修正</div>' : (pat === '趨勢反轉' ? '<div style="font-size:11px;color:#b3261e;font-weight:700">趨勢反轉</div>' : '');
-    let row = '<tr><td>' + (i + 1) + '</td><td><input type="checkbox" data-track="' + esc(s.ticker) + '"' + (tracked ? ' checked disabled' : '') + ' title="加入追蹤專區" style="width:16px;height:16px;cursor:pointer"></td><td><strong>' + esc(s.ticker) + '</strong>' + patTag + '</td><td class="ellipsis" title="' + esc(s.name) + '">' + esc(s.name) + '</td><td>' + esc(s.sector) + '</td>' +
+    const divR = divergence(g, l);
+    const divTag = divR ? '<div style="font-size:11px;color:#b3261e;font-weight:700" title="' + esc(divR.join('；')) + '">⚠️ 分歧</div>' : '';
+    let row = '<tr><td>' + (i + 1) + '</td><td><input type="checkbox" data-track="' + esc(s.ticker) + '"' + (tracked ? ' checked disabled' : '') + ' title="加入追蹤專區" style="width:16px;height:16px;cursor:pointer"></td><td><strong>' + esc(s.ticker) + '</strong>' + patTag + divTag + '</td><td class="ellipsis" title="' + esc(s.name) + '">' + esc(s.name) + '</td><td>' + esc(s.sector) + '</td>' +
       '<td class="num">' + num(s.price) + '</td><td class="num" style="color:#b3261e">' + (s.chgW == null ? '–' : s.chgW.toFixed(1) + '%') + '</td>' +
       '<td class="num">' + fmtMcap(s.mcap) + '</td><td>' + status + '</td><td>' + irr + '</td><td class="num">' + prob + '</td>' +
       (viewDate
@@ -860,7 +862,7 @@ $('S_btnTestSync').addEventListener('click', async () => {
     else el.textContent = '❌ 連線失敗（' + r.status + '）';
   } catch (e) { el.textContent = '❌ 連線失敗：' + e.message; }
 });
-$('L_ver').textContent = 'v3.9';
+$('L_ver').textContent = 'v3.9.1';
 renderL();
 renderViewDateOptions();
 updateLogView();
@@ -893,6 +895,16 @@ function analysisInner(res) {
     '<div style="color:#5b6b7a;font-size:12.5px">' + esc((res.at || '').slice(0, 16).replace('T', ' ')) + ' / ' + esc(res.model || '') + '</div>';
 }
 
+function divergence(g, l) {
+  if (!g || !l || g.err || l.err || g.raw || l.raw) return null;
+  const reasons = [];
+  if (g.pattern && l.pattern && g.pattern !== l.pattern) reasons.push('型態不同（Gemini：' + g.pattern + '／本地：' + l.pattern + '）');
+  if (typeof g.reboundProb === 'number' && typeof l.reboundProb === 'number') {
+    const dp = Math.abs(g.reboundProb - l.reboundProb);
+    if (dp >= 30) reasons.push('反彈機率差 ' + dp + ' 個百分點（Gemini ' + g.reboundProb + '%／本地 ' + l.reboundProb + '%）');
+  }
+  return reasons.length ? reasons : null;
+}
 function ltText(s) {
   const parts = [];
   if (s.chg1M != null) parts.push('近 1 月 ' + s.chg1M.toFixed(1) + '%');
@@ -907,9 +919,11 @@ function showStockModal(s) {
   if (g && l && !g.err && !l.err && !g.raw && !l.raw) {
     const same = (g.irrational || '') === (l.irrational || '');
     const dp = (typeof g.reboundProb === 'number' && typeof l.reboundProb === 'number') ? Math.abs(g.reboundProb - l.reboundProb) : null;
+    const divR = divergence(g, l);
     h += '<div style="background:#eef2f6;border-radius:8px;padding:8px 12px;margin-top:10px"><strong>比較：</strong>不理性結論' +
       (same ? '相同' : '不同（Gemini：' + esc(g.irrational || '') + '／本地：' + esc(l.irrational || '') + '）') +
-      (dp == null ? '' : '；反彈機率差 ' + dp + ' 個百分點') + '</div>';
+      (dp == null ? '' : '；反彈機率差 ' + dp + ' 個百分點') +
+      (divR ? '<br><span style="color:#b3261e"><strong>⚠️ 兩模型分歧：</strong>' + esc(divR.join('；')) + '</span>' : '') + '</div>';
   }
   h += '<div class="k">🤖 Gemini</div>' + analysisInner(g);
   h += '<div class="k">🖥️ 本地模型</div>' + analysisInner(l);
@@ -1238,6 +1252,8 @@ function showSnapshotModal(s, date) {
   let h = '<h3>' + esc(s.ticker) + ' ' + esc(s.name) + '</h3>' +
     '<div>產業：' + esc(s.sector || '–') + '・' + esc(date) + ' 榜單價 $' + num(s.price) + '・該週 ' + (s.chgW == null ? '–' : s.chgW.toFixed(1) + '%') + ltText(s) + '・市值 ' + fmtMcap(s.mcap) + '</div>';
   h += '<div style="margin:10px 0">' + (isTracked(s.ticker) ? '<span style="color:#137333">已在追蹤專區 ✓</span>' : '<button class="small secondary" data-snap-track="' + esc(s.ticker) + '">＋ 加入追蹤（以現價計）</button>') + '</div>';
+  const divR = divergence(g, l);
+  if (divR) h += '<div style="background:#fdf0ef;border-radius:8px;padding:8px 12px;margin:10px 0;color:#b3261e"><strong>⚠️ 兩模型分歧：</strong>' + esc(divR.join('；')) + '。若分歧牽涉事實（財報日期、事件有無），以有即時搜尋的 Gemini 為準。</div>';
   h += '<div class="k">🤖 Gemini（該週分析）</div>' + analysisInner(g);
   h += '<div class="k">🖥️ 本地模型（該週分析）</div>' + analysisInner(l);
   const all = ARCH.filter(a => a.ticker === s.ticker).length;
