@@ -188,10 +188,11 @@ function resOf(t, prov) { const r = L.results[t]; return r ? (r[prov] || null) :
 function provOfRes(res) { return (res && res.model && String(res.model).indexOf('local:') === 0) ? 'local' : 'gemini'; }
 function probColor(p) { const n = Math.max(0, Math.min(100, Number(p) || 0)); return 'hsl(' + Math.round(n * 1.2) + ', 72%, 36%)'; }
 const FLAG_RE = /私人公司|未上市|尚未上市|沒有公開上市|未公開上市|不存在的公司|無法識別公司|private company|not (publicly )?(listed|traded)/i;
+const EARN_CLAIM_RE = /(已|已經|已经)(發布|发布|公布).{0,10}(財報|财报|業績|业绩|季報|季报)|(財報|财报|業績|业绩|季報|季报).{0,10}(已|已經|已经)(發布|发布|公布)|(\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*日).{0,14}(發布|发布|公布).{0,10}(財報|财报|業績|业绩|季報|季报)/;
 function doneCount(prov) { return L.list.filter(s => { const r = resOf(s.ticker, prov); return r && !r.err; }).length; }
 
-const TV_COLS = ['name', 'description', 'close', 'change|1W', 'volume', 'market_cap_basic', 'sector', 'exchange', 'change|1M', 'change|3M', 'change|1Y'];
-function tvRow(d) { return { ticker: d[0], name: d[1], price: d[2], chgW: d[3], volume: d[4], mcap: d[5], sector: d[6], exchange: d[7] || '', chg1M: d[8] == null ? null : d[8], chg3M: d[9] == null ? null : d[9], chg1Y: d[10] == null ? null : d[10] }; }
+const TV_COLS = ['name', 'description', 'close', 'change|1W', 'volume', 'market_cap_basic', 'sector', 'exchange', 'change|1M', 'change|3M', 'change|1Y', 'earnings_release_next_date'];
+function tvRow(d) { return { ticker: d[0], name: d[1], price: d[2], chgW: d[3], volume: d[4], mcap: d[5], sector: d[6], exchange: d[7] || '', chg1M: d[8] == null ? null : d[8], chg3M: d[9] == null ? null : d[9], chg1Y: d[10] == null ? null : d[10], nextEarn: d[11] ? new Date(d[11] * 1000).toISOString().slice(0, 10) : null }; }
 async function tvScan(extra) {
   const body = Object.assign({ options: { lang: 'en' }, markets: ['america'], symbols: { query: { types: ['stock'] } }, columns: TV_COLS }, extra || {});
   const r = await fetch('https://scanner.tradingview.com/america/scan', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(body) });
@@ -334,6 +335,7 @@ function buildBatchPrompt(batch, newsMap) {
     if (s.chg3M != null) lt.push('近 3 個月 ' + s.chg3M.toFixed(1) + '%');
     if (s.chg1Y != null) lt.push('近 1 年 ' + s.chg1Y.toFixed(1) + '%');
     if (lt.length) line += '（長期漲幅：' + lt.join('、') + '）';
+    if (s.nextEarn) line += '，下次財報日：' + s.nextEarn;
     const nw = newsMap && newsMap[s.ticker];
     if (nw) line += '\n  近期查證資訊：' + nw;
     return line;
@@ -342,7 +344,7 @@ function buildBatchPrompt(batch, newsMap) {
   const today = nowD.getFullYear() + ' 年 ' + (nowD.getMonth() + 1) + ' 月 ' + nowD.getDate() + ' 日';
   return '今天是 ' + today + '。你是股票分析師，用第一性原理逐一分析以下美股本週（最近 7 天）大跌的原因。清單：\n' + lines +
     '\n【日期規則】新聞標題後括號內是該新聞的發布日期。禁止使用「本週、上週、今年、去年、近期、近日、最近、本月」等相對時間詞：dropCause 裡寫到任何消息或事件，一律註明確切日期（YYYY-MM-DD，照抄新聞的日期）；只知道月份就寫 YYYY-MM；日期不明就寫「日期不詳」；嚴禁自行推測年份，絕對不要寫成過去的年份。【誠實規則】沒有資料就明寫「無資料」，嚴禁用推測冒充事實；要推測可以，但必須標明「推測」。' +
-    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）。【資訊規則】有附查證資訊的，必須以其為主要依據，不得忽略另編原因；沒有附查證資訊的，dropCause 開頭必須寫「（無即時新聞可查）」，只能依股價表現做保守推測，嚴禁編造具體事件、數字或日期。【查證規則】每檔先用搜尋查證該代號目前的上市狀態（注意近期 IPO、更名、併購、下市）；清單裡的股價、市值、漲跌幅都是真實市場數據，若第一時間查不到公司，換關鍵字（代號＋IPO、代號＋Nasdaq、公司名＋stock）再查，不可用「私人公司／未上市／不存在」當結論，除非搜尋證據明確支持。【型態判斷】只看本週跌幅會誤判，必須先對照長期漲幅判斷下跌型態：超賣反彈（長期漲幅普通、本週因一次性消息超跌）／漲多修正（過去 3 個月或 1 年漲幅巨大、本週只是從高點回落）／趨勢反轉（基本面惡化且長期走弱）。反彈機率定義為「漲回下跌前價位」的機率：漲多修正的股票即使短期有技術反彈，回到前高也難，反彈機率應給低，除非有基本面新利多支撐更高價；漲多回調不算市場不理性，不得因本週跌得多就判「是」。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
+    '\n請先查明每檔本週下跌的實際原因（財報、指引、公司消息、產業、總經或資金面）。【資訊規則】有附查證資訊的，必須以其為主要依據，不得忽略另編原因；沒有附查證資訊的，dropCause 開頭必須寫「（無即時新聞可查）」，只能依股價表現做保守推測，嚴禁編造具體事件、數字或日期。【查證規則】每檔先用搜尋查證該代號目前的上市狀態（注意近期 IPO、更名、併購、下市）；清單裡的股價、市值、漲跌幅都是真實市場數據，若第一時間查不到公司，換關鍵字（代號＋IPO、代號＋Nasdaq、公司名＋stock）再查，不可用「私人公司／未上市／不存在」當結論，除非搜尋證據明確支持。若清單有標示下次財報日，該日期之前不得聲稱該季財報已發布或業績已公布，只能寫財報前的避險或預期心理。【型態判斷】只看本週跌幅會誤判，必須先對照長期漲幅判斷下跌型態：超賣反彈（長期漲幅普通、本週因一次性消息超跌）／漲多修正（過去 3 個月或 1 年漲幅巨大、本週只是從高點回落）／趨勢反轉（基本面惡化且長期走弱）。反彈機率定義為「漲回下跌前價位」的機率：漲多修正的股票即使短期有技術反彈，回到前高也難，反彈機率應給低，除非有基本面新利多支撐更高價；漲多回調不算市場不理性，不得因本週跌得多就判「是」。然後只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown 圍欄。陣列每檔一個物件，欄位：' +
     '{"ticker":"代號","dropCause":"下跌主因，一段話，註明消息日期","pattern":"超賣反彈|漲多修正|趨勢反轉|不明","category":"基本面惡化|消息面一次性衝擊|市場情緒/資金面|產業系統性|不明",' +
     '"irrational":"是|否|部分","irrationalReason":"為什麼這樣判斷，公司核心基本面是否實質受損","reboundProb":0到100的整數（未來1到3個月漲回本週下跌前價位的機率）,' +
     '"keyPoints":"投資人該觀察的2到3個驗證點"}';
@@ -544,6 +546,16 @@ async function analyzeBatch(batch, provider) {
         const out2 = await geminiCall(p2);
         const f2 = parseBatch(out2.text)[String(s.ticker).toUpperCase()];
         if (f2 && !FLAG_RE.test((f2.cause || '') + '|' + (f2.category || '') + '|' + (f2.reason || ''))) res = Object.assign({ at: at, model: out2.model + '（查證重跑）' }, f2);
+      } catch (e) { /* 查證重跑失敗就保留原結果 */ }
+    }
+    if (provider === 'local' && f && s.nextEarn && s.nextEarn > todayStr() && EARN_CLAIM_RE.test(f.cause || '')) {
+      // 本地事實守門：下次財報還沒到就聲稱已發布財報（DFTX 型捏造）→ 帶著正確日期自動重跑一次
+      try {
+        const nm = out.newsMap ? { [s.ticker]: out.newsMap[s.ticker] } : null;
+        const p2 = '【特別查證】代號 ' + s.ticker + ' 的下一次財報日期是 ' + s.nextEarn + '，該季財報尚未發布。你上次的分析聲稱財報已經發布，與事實不符。請重新分析：絕對不得聲稱財報或業績已發布；若下跌與財報有關，只能寫成財報前的避險或預期心理。\n' + buildBatchPrompt([s], nm);
+        const out2 = await localCall(p2);
+        const f2 = parseBatch(out2.text)[String(s.ticker).toUpperCase()];
+        if (f2 && !EARN_CLAIM_RE.test(f2.cause || '')) res = Object.assign({ at: at, model: out.model + '（查證重跑）' }, f2);
       } catch (e) { /* 查證重跑失敗就保留原結果 */ }
     }
     if (provider === 'local') res.news = (out.newsMap && out.newsMap[s.ticker]) || '';
@@ -862,7 +874,7 @@ $('S_btnTestSync').addEventListener('click', async () => {
     else el.textContent = '❌ 連線失敗（' + r.status + '）';
   } catch (e) { el.textContent = '❌ 連線失敗：' + e.message; }
 });
-$('L_ver').textContent = 'v3.9.1';
+$('L_ver').textContent = 'v3.10';
 renderL();
 renderViewDateOptions();
 updateLogView();
@@ -991,7 +1003,7 @@ document.querySelectorAll('details.grp').forEach(d => {
 function isTracked(t) { return TRACK.some(x => x.ticker === t); }
 function addTrack(s) {
   if (!s || isTracked(s.ticker)) return;
-  TRACK.push({ ticker: s.ticker, name: s.name || '', sector: s.sector || '', exchange: s.exchange || '', addedAt: todayStr(), addedPrice: (s.price == null ? null : s.price), addedChgW: (s.chgW == null ? null : s.chgW), price: (s.price == null ? null : s.price), chgW: (s.chgW == null ? null : s.chgW), mcap: s.mcap || null, priceAt: '', spxAtAdd: SPX_NOW });
+  TRACK.push({ ticker: s.ticker, name: s.name || '', sector: s.sector || '', exchange: s.exchange || '', addedAt: todayStr(), addedPrice: (s.price == null ? null : s.price), addedChgW: (s.chgW == null ? null : s.chgW), price: (s.price == null ? null : s.price), chgW: (s.chgW == null ? null : s.chgW), mcap: s.mcap || null, priceAt: '', spxAtAdd: SPX_NOW, nextEarn: s.nextEarn || null });
   saveJSON(TKEY, TRACK);
 }
 function removeTrack(t) {
@@ -1012,10 +1024,68 @@ function mergeTrack(a, b) {
   return [...m.values()];
 }
 function trackHistCount(t) { return ARCH.filter(a => a.ticker === t).length; }
+/* ----- 追蹤排序與回測複製 ----- */
+const TSKEY = 'stockResearch.trackSort.v1';
+let trackSort = loadJSON(TSKEY, 'addedDesc');
+function sortedTrack() {
+  const since = x => (x.price != null && x.addedPrice) ? (x.price / x.addedPrice - 1) * 100 : null;
+  const alpha = x => { const s = since(x), b = benchChgFor(x); return (s != null && b != null) ? s - b : null; };
+  const byVal = (f, dir) => (a, b) => { const va = f(a), vb = f(b); if (va == null && vb == null) return 0; if (va == null) return 1; if (vb == null) return -1; return dir * (vb - va); };
+  const arr = TRACK.slice();
+  switch (trackSort) {
+    case 'addedAsc': arr.sort((a, b) => (a.addedAt || '').localeCompare(b.addedAt || '') || a.ticker.localeCompare(b.ticker)); break;
+    case 'sinceDesc': arr.sort(byVal(since, 1)); break;
+    case 'sinceAsc': arr.sort(byVal(since, -1)); break;
+    case 'alphaDesc': arr.sort(byVal(alpha, 1)); break;
+    case 'ticker': arr.sort((a, b) => a.ticker.localeCompare(b.ticker)); break;
+    default: arr.sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || '') || a.ticker.localeCompare(b.ticker));
+  }
+  return arr;
+}
+async function copyText(txt) {
+  try { await navigator.clipboard.writeText(txt); return true; }
+  catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+    ta.remove();
+    return ok;
+  }
+}
+function copyBacktest() {
+  const pct = v => v == null ? '–' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+  const now = new Date();
+  const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0') + ' ' + now.toTimeString().slice(0, 5);
+  let txt = '# 追蹤回測資訊（複製於 ' + stamp + '）\n共 ' + TRACK.length + ' 檔\n';
+  for (const x of sortedTrack()) {
+    const since = (x.price != null && x.addedPrice) ? (x.price / x.addedPrice - 1) * 100 : null;
+    txt += '\n## ' + x.ticker + ' ' + (x.name || '') + (x.sector ? '（' + x.sector + '）' : '') + '\n';
+    txt += '加入：' + (x.addedAt || '–') + ' @ $' + (x.addedPrice == null ? '–' : x.addedPrice) +
+      '｜現價：$' + (x.price == null ? '–' : x.price) + (x.priceAt ? '（更新 ' + x.priceAt.slice(0, 10) + '）' : '') +
+      '｜自加入：' + pct(since) + '｜大盤同期：' + pct(benchChgFor(x)) +
+      '｜本週：' + (x.chgW == null ? '–' : x.chgW.toFixed(1) + '%') + '\n';
+    const hist = ARCH.filter(a => a.ticker === x.ticker).slice().sort((a, b) => ((b.res && b.res.at) || '').localeCompare((a.res && a.res.at) || ''));
+    if (!hist.length) { txt += '分析紀錄：（無）\n'; continue; }
+    txt += '分析紀錄（' + hist.length + ' 筆）：\n';
+    for (const a of hist) {
+      const r = a.res || {};
+      const prov = (a.provider || provOfRes(r)) === 'local' ? '本地' : 'Gemini';
+      txt += '- [' + (a.date || '') + '・' + prov + '・' + (r.model || '') + ']';
+      if (r.err) { txt += ' 分析失敗：' + r.err + '\n'; continue; }
+      if (r.raw) { txt += ' 原始回覆（解析失敗）：' + String(r.raw).slice(0, 300) + '\n'; continue; }
+      txt += ' 型態：' + (r.pattern || '–') + '｜分類：' + (r.category || '') + '｜不理性：' + (r.irrational || '') + '（' + (r.reason || '') + '）｜反彈機率：' + (r.reboundProb === '' || r.reboundProb == null ? '–' : r.reboundProb + '%') + '\n';
+      txt += '  主因：' + (r.cause || '') + '\n';
+      txt += '  觀察重點：' + (r.keyPoints || '') + '\n';
+    }
+  }
+  return txt;
+}
 function renderTrack() {
   const tb = $('T_tbody'); if (!tb) return;
   $('T_empty').style.display = TRACK.length ? 'none' : 'block';
-  const rows = TRACK.slice().sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || '') || a.ticker.localeCompare(b.ticker));
+  const rows = sortedTrack();
   tb.innerHTML = rows.map(x => {
     const since = (x.price != null && x.addedPrice) ? ((x.price / x.addedPrice - 1) * 100) : null;
     const sinceTxt = since == null ? '–' : '<span style="color:' + (since >= 0 ? '#137333' : '#b3261e') + ';font-weight:700">' + (since >= 0 ? '+' : '') + since.toFixed(1) + '%</span>';
@@ -1039,7 +1109,7 @@ async function refreshTrackedPrices() {
     let hit = 0;
     TRACK.forEach(x => {
       const m = map[x.ticker];
-      if (m) { x.price = m.price; x.chgW = m.chgW; x.mcap = m.mcap; if (m.exchange) x.exchange = m.exchange; x.priceAt = new Date().toISOString(); hit++; }
+      if (m) { x.price = m.price; x.chgW = m.chgW; x.mcap = m.mcap; if (m.exchange) x.exchange = m.exchange; if (m.nextEarn) x.nextEarn = m.nextEarn; x.priceAt = new Date().toISOString(); hit++; }
     });
     saveJSON(TKEY, TRACK);
     try { const v = await fetchSpxNow(); if (v) { SPX_NOW = v; BENCH[todayStr()] = v; saveJSON(BKEY, BENCH); } } catch (e) { /* 大盤抓不到不影響個股刷新 */ }
@@ -1118,6 +1188,12 @@ $('T_tbody').addEventListener('click', (e) => {
   else if (btn.dataset.tbtn === 'remove') { if (confirm('把 ' + btn.dataset.t + ' 移出追蹤區？（分析日誌會保留）')) removeTrack(btn.dataset.t); }
 });
 $('T_btnRefresh').addEventListener('click', refreshTrackedPrices);
+if ($('T_sort')) { $('T_sort').value = trackSort; $('T_sort').addEventListener('change', () => { trackSort = $('T_sort').value; saveJSON(TSKEY, trackSort); renderTrack(); }); }
+if ($('T_btnCopy')) $('T_btnCopy').addEventListener('click', async () => {
+  if (!TRACK.length) { $('T_status').textContent = '尚無追蹤股票可複製'; return; }
+  const ok = await copyText(copyBacktest());
+  $('T_status').textContent = ok ? '已複製 ' + TRACK.length + ' 檔回測資訊（價格、日期、分析紀錄）' : '複製失敗，請再按一次';
+});
 ensureBench();
 $('modalContent').addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-tact]');
