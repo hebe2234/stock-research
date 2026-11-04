@@ -47,6 +47,9 @@
   details.grp { background: #fff; border: 1px solid #dde3e9; border-radius: 8px; padding: 10px 14px; margin: 0 0 10px; }
   details.grp > summary { cursor: pointer; font-weight: 600; font-size: 14.5px; }
   details.grp .grid { margin-top: 10px; }
+  #tabbar { position: sticky; top: 0; z-index: 20; display: flex; gap: 6px; flex-wrap: wrap; background: #f6f7f9; padding: 8px 0; margin-bottom: 10px; border-bottom: 2px solid #dde3e9; }
+  .tabbtn { background: #e3e8ee; color: #14324f; border-radius: 999px; padding: 8px 18px; font-size: 14.5px; }
+  .tabbtn.active { background: #14324f; color: #fff; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -55,6 +58,13 @@
   <p>基本面為主、消息面為輔的選股研究整理。資料存在本機瀏覽器，請定期用「匯出備份」存 JSON。</p>
 </header>
 <main>
+  <nav id="tabbar">
+    <button type="button" class="tabbtn" data-tab="watch">📋 研究清單</button>
+    <button type="button" class="tabbtn" data-tab="losers">📉 大跌榜</button>
+    <button type="button" class="tabbtn" data-tab="track">📌 追蹤回測</button>
+    <button type="button" class="tabbtn" data-tab="set">⚙️ 設定</button>
+  </nav>
+  <section id="watchZone">
   <div class="toolbar">
     <input type="search" id="q" placeholder="搜尋代號 / 公司 / 產業…" size="26">
     <select id="sortBy">
@@ -118,7 +128,8 @@
     </table>
     <div class="empty" id="emptyState">尚無資料。按「＋ 新增股票」開始整理第一檔。</div>
   </div>
-  <section id="losersZone" style="margin-top:36px;border-top:2px solid #dde3e9;padding-top:20px">
+  </section>
+  <section id="losersZone" style="padding-top:6px">
     <h2 style="margin:0 0 6px;font-size:20px">📉 本週大跌股專區 — 第一性原理 × Gemini</h2>
     <p style="font-size:13px;color:#45566a;line-height:1.6;margin:0 0 12px">
       每週抓下跌最多的前 100 檔（NASDAQ / NYSE / AMEX、股價 ≥ $5、市值 ≥ $300M，先擋掉仙股洗版）。
@@ -186,7 +197,52 @@
       <div id="P_history" style="font-size:12.5px;color:#45566a;margin-top:8px"></div>
     </div>
 
-    <h3 style="margin:22px 0 8px;font-size:16px">⚙️ 專區設定（只存在本機瀏覽器，不會上傳 GitHub）</h3>
+    <h3 style="margin:22px 0 8px;font-size:16px">📓 今日分析日誌</h3>
+    <div class="toolbar">
+      <button class="secondary" id="L_btnSyncNow">☁️ 立即同步</button>
+      <button class="secondary" id="L_btnDownloadLog">下載今日日誌 .md</button>
+      <span id="L_docStatus" style="font-size:13px;color:#45566a"></span> <span id="L_ver" style="font-size:11px;color:#8a97a5"></span>
+    </div>
+    <pre id="L_logView" style="white-space:pre-wrap;background:#fff;border:1px solid #dde3e9;border-radius:8px;max-height:320px;overflow:auto;padding:12px;font-size:12.5px;line-height:1.6">（今日尚無分析紀錄）</pre>
+  </section>
+
+  <section id="trackZone" style="padding-top:6px">
+    <h2 style="margin:0 0 6px;font-size:20px">📌 追蹤・回測專區</h2>
+    <p style="font-size:13px;color:#45566a;line-height:1.6;margin:0 0 12px">
+      從大跌榜勾選加入的股票會留在這裡，跨週保留、不會被下週榜單洗掉。每檔記錄加入追蹤的日期與當時價格；
+      點「詳情」看股價圖和不同日期的 AI 分析日誌，也可以直接在這裡重新分析。追蹤清單會跟著跨裝置同步一起走。
+      上方可切換排序；「複製回測資訊」會把全部追蹤股票的價格、日期與分析紀錄整理成文字一次複製，方便貼到其他地方回測檢視。
+    </p>
+    <div class="toolbar">
+      <button class="secondary" id="T_btnRefresh">↻ 刷新現價</button>
+      <label style="font-size:13.5px">排序：
+        <select id="T_sort">
+          <option value="addedDesc">加入日期（新→舊）</option>
+          <option value="addedAsc">加入日期（舊→新）</option>
+          <option value="sinceDesc">自加入漲跌（高→低）</option>
+          <option value="sinceAsc">自加入漲跌（低→高）</option>
+          <option value="alphaDesc">跑贏大盤（高→低）</option>
+          <option value="ticker">代號（A→Z）</option>
+        </select>
+      </label>
+      <button class="secondary" id="T_btnCopy">📋 複製回測資訊</button>
+      <span id="T_status" style="font-size:13px;color:#45566a"></span>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>代號</th><th>公司</th><th>加入日期</th><th class="num">加入時價</th><th class="num">現價</th>
+          <th class="num">自加入漲跌</th><th class="num">大盤同期（S&P 500）</th><th class="num">本週漲跌</th><th>分析紀錄</th><th>操作</th>
+        </tr></thead>
+        <tbody id="T_tbody"></tbody>
+      </table>
+      <div class="empty" id="T_empty">尚無追蹤。到上方大跌榜勾選股票（表格左側方框）即可加入。</div>
+    </div>
+  </section>
+
+  <section id="setZone" style="padding-top:6px">
+    <h2 style="margin:0 0 6px;font-size:20px">⚙️ 設定</h2>
+    <p style="font-size:13px;color:#45566a;line-height:1.6;margin:0 0 12px">這些設定只存在本機瀏覽器，不會上傳 GitHub、也不會跟著同步到其他裝置（每台裝置各自貼一次 key）。</p>
     <form class="panel" id="S_form">
       <details class="grp" id="grpExec" open>
         <summary>▶ 執行設定</summary>
@@ -238,47 +294,6 @@
       </div>
     </form>
 
-    <h3 style="margin:22px 0 8px;font-size:16px">📓 今日分析日誌</h3>
-    <div class="toolbar">
-      <button class="secondary" id="L_btnSyncNow">☁️ 立即同步</button>
-      <button class="secondary" id="L_btnDownloadLog">下載今日日誌 .md</button>
-      <span id="L_docStatus" style="font-size:13px;color:#45566a"></span> <span id="L_ver" style="font-size:11px;color:#8a97a5"></span>
-    </div>
-    <pre id="L_logView" style="white-space:pre-wrap;background:#fff;border:1px solid #dde3e9;border-radius:8px;max-height:320px;overflow:auto;padding:12px;font-size:12.5px;line-height:1.6">（今日尚無分析紀錄）</pre>
-  </section>
-
-  <section id="trackZone" style="margin-top:36px;border-top:2px solid #dde3e9;padding-top:20px">
-    <h2 style="margin:0 0 6px;font-size:20px">📌 追蹤專區</h2>
-    <p style="font-size:13px;color:#45566a;line-height:1.6;margin:0 0 12px">
-      從大跌榜勾選加入的股票會留在這裡，跨週保留、不會被下週榜單洗掉。每檔記錄加入追蹤的日期與當時價格；
-      點「詳情」看股價圖和不同日期的 AI 分析日誌，也可以直接在這裡重新分析。追蹤清單會跟著跨裝置同步一起走。
-      上方可切換排序；「複製回測資訊」會把全部追蹤股票的價格、日期與分析紀錄整理成文字一次複製，方便貼到其他地方回測檢視。
-    </p>
-    <div class="toolbar">
-      <button class="secondary" id="T_btnRefresh">↻ 刷新現價</button>
-      <label style="font-size:13.5px">排序：
-        <select id="T_sort">
-          <option value="addedDesc">加入日期（新→舊）</option>
-          <option value="addedAsc">加入日期（舊→新）</option>
-          <option value="sinceDesc">自加入漲跌（高→低）</option>
-          <option value="sinceAsc">自加入漲跌（低→高）</option>
-          <option value="alphaDesc">跑贏大盤（高→低）</option>
-          <option value="ticker">代號（A→Z）</option>
-        </select>
-      </label>
-      <button class="secondary" id="T_btnCopy">📋 複製回測資訊</button>
-      <span id="T_status" style="font-size:13px;color:#45566a"></span>
-    </div>
-    <div class="tablewrap">
-      <table>
-        <thead><tr>
-          <th>代號</th><th>公司</th><th>加入日期</th><th class="num">加入時價</th><th class="num">現價</th>
-          <th class="num">自加入漲跌</th><th class="num">大盤同期（S&P 500）</th><th class="num">本週漲跌</th><th>分析紀錄</th><th>操作</th>
-        </tr></thead>
-        <tbody id="T_tbody"></tbody>
-      </table>
-      <div class="empty" id="T_empty">尚無追蹤。到上方大跌榜勾選股票（表格左側方框）即可加入。</div>
-    </div>
   </section>
 </main>
 <footer>
@@ -291,6 +306,6 @@
     <div id="modalContent"></div>
   </div>
 </div>
-<script src="app.js?v=28"></script>
+<script src="app.js?v=29"></script>
 </body>
 </html>
