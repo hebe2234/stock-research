@@ -874,7 +874,7 @@ $('S_btnTestSync').addEventListener('click', async () => {
     else el.textContent = '❌ 連線失敗（' + r.status + '）';
   } catch (e) { el.textContent = '❌ 連線失敗：' + e.message; }
 });
-$('L_ver').textContent = 'v3.10';
+$('L_ver').textContent = 'v3.11';
 renderL();
 renderViewDateOptions();
 updateLogView();
@@ -1194,6 +1194,17 @@ if ($('T_btnCopy')) $('T_btnCopy').addEventListener('click', async () => {
   const ok = await copyText(copyBacktest());
   $('T_status').textContent = ok ? '已複製 ' + TRACK.length + ' 檔回測資訊（價格、日期、分析紀錄）' : '複製失敗，請再按一次';
 });
+/* ----- 分頁切換 ----- */
+const TABKEY = 'stockResearch.tab.v1';
+const TABZONES = { watch: 'watchZone', losers: 'losersZone', track: 'trackZone', set: 'setZone' };
+function showTab(name) {
+  if (!TABZONES[name]) name = 'losers';
+  for (const k of Object.keys(TABZONES)) { const el = $(TABZONES[k]); if (el) el.style.display = (k === name) ? '' : 'none'; }
+  document.querySelectorAll('.tabbtn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  try { localStorage.setItem(TABKEY, name); } catch (e) {}
+}
+document.querySelectorAll('.tabbtn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+showTab((() => { try { return localStorage.getItem(TABKEY); } catch (e) { return null; } })() || 'losers');
 ensureBench();
 $('modalContent').addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-tact]');
